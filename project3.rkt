@@ -1,0 +1,2847 @@
+#lang typed/racket
+
+(require "../include/cs151-core.rkt")
+(require "../include/cs151-image.rkt")
+(require "../include/cs151-universe.rkt")
+(require typed/test-engine/racket-tests)
+(require (only-in typed/racket/gui/base put-file get-file))
+
+
+;; ====== data definitions
+
+(define-type Player (U 'Black 'White))
+
+(define-struct OccupiedPoint
+    ([color : Player]
+     [count : Integer]))
+
+(define-type Point (U OccupiedPoint 'EmptyPoint))
+
+(define-struct Board
+    ([points : (Listof Point)]
+     [black-bar : Integer]
+     [white-bar : Integer]
+     [black-off : Integer]
+     [white-off : Integer]))
+
+
+(define-struct Style
+    ([checker-radius : Integer]
+     [spacing : Integer]
+     [black-checker : (Integer -> Image)]
+     [white-checker : (Integer -> Image)]
+     [dark-point : (Integer Boolean -> Image)]
+     [light-point : (Integer Boolean -> Image)]
+     [background : (Integer Integer -> Image)]
+     [label : (String -> Image)]
+     [black-die : (Integer Integer -> Image)]
+     [white-die : (Integer Integer -> Image)]))
+
+(define-struct Game
+    ([board : Board]
+     [turn : Player]
+     [moves : (Listof Integer)]))
+
+(define-struct PointNum
+   ([num : Integer]))
+
+(define-type ClickLoc (U PointNum 'BlackBar 'WhiteBar 'BlackOff 'WhiteOff
+    'BlackDice 'WhiteDice 'Nowhere))
+
+(define-type BoardLoc (U PointNum 'BlackBar 'WhiteBar 'BlackOff 'WhiteOff
+    'Nowhere))
+
+
+
+;; ====== Draw board functions
+
+(: draw-top-dark-triangle (Integer -> Image))
+;; draws a dark point on the board for top row
+;; input: radius (r)
+(define (draw-top-dark-triangle r)
+  (triangle/sss (* r (sqrt 101)) (* r (sqrt 101))
+                (* 2 r) 'solid 'brown))
+
+(: draw-top-light-triangle (Integer -> Image))
+;; draws a light point on the board for top row
+;; input: radius (r)
+(define (draw-top-light-triangle r)
+  (triangle/sss (* r (sqrt 101)) (* r (sqrt 101))
+                (* 2 r) 'solid 'white))
+
+(: draw-bottom-dark-triangle (Integer -> Image))
+;; draws the dark point on the board for bottom row
+;; input: radius (r)
+(define (draw-bottom-dark-triangle r)
+  (rotate 180 (triangle/sss (* r (sqrt 101)) (* r (sqrt 101))
+                            (* 2 r) 'solid 'brown)))
+
+(: draw-bottom-light-triangle (Integer -> Image))
+;; draws the light point on the board for bottom row
+;; input: radius (r)
+(define (draw-bottom-light-triangle r)
+  (rotate 180 (triangle/sss (* r (sqrt 101)) (* r (sqrt 101))
+                            (* 2 r) 'solid 'white)))
+
+(: dark-point (Integer Boolean -> Image))
+;; if boolean #t then draw bottom triangle for dark
+;; else then draw top row triangle for dark
+;; input: radius (r) and boolean b
+(define (dark-point r b)
+  (if b (draw-bottom-dark-triangle r) (draw-top-dark-triangle r)))
+
+(: light-point (Integer Boolean -> Image))
+;; if boolean #t then draw bottom triangle for light
+;; else then draw bottom row triangle for light
+;; input: radius (r) and boolean b
+(define (light-point r b)
+  (if b (draw-bottom-light-triangle r) (draw-top-light-triangle r)))
+
+
+(: draw-top-row (Integer Style (Listof Point) -> Image))
+;; draws the top row of points
+;; inputs: start-num, which is set initially to 0 until rows are drawn
+;; style, and the list of points
+(define (draw-top-row start-num style points)
+  (cond
+    [(> start-num 2) empty-image]
+    [(< start-num 0) empty-image]
+    [else
+     (match style
+       [(Style r spacing black-checker white-checker
+               dark-point light-point bgc label black-die white-die)
+        (match points
+          ['() (beside/align "top"
+                             (dark-point r #f)
+                             (square spacing 'solid 'seagreen)
+                             (light-point r #f)
+                             (square spacing 'solid 'seagreen)
+                             (draw-top-row (+ 1 start-num) style points))]
+          [(cons 'EmptyPoint rest)
+           (match rest
+             ['()(beside/align "top"
+                             (dark-point r #f)
+                             (square spacing 'solid 'seagreen)
+                             (light-point r #f)
+                             (square spacing 'solid 'seagreen)
+                             (draw-top-row (+ 1 start-num) style rest))]
+             [(cons 'EmptyPoint rest2)
+              (beside/align "top"
+                         (dark-point r #f)
+                         (square spacing 'solid 'seagreen)
+                         (light-point r #f)
+                         (square spacing 'solid 'seagreen)
+                         (draw-top-row (+ 1 start-num) style rest2))]
+             [(cons (OccupiedPoint color2 count2) rest2)
+              (beside/align "top"
+                         (dark-point r #f)
+                         (square spacing 'solid 'seagreen)
+                         (overlay/align "middle" "top"
+                         (if (symbol=? color2 'Black)
+                              (num-black-checker r count2)
+                              (num-white-checker r count2))
+                         (light-point r #f))
+                         (square spacing 'solid 'seagreen)
+                         (draw-top-row (+ 1 start-num) style rest2))])]
+          [(cons (OccupiedPoint color count) rest)
+           (match rest
+             ['()
+              (beside/align "top"
+                        (overlay/align "middle" "top"
+                          (if (symbol=? color 'Black)
+                              (num-black-checker r count)
+                              (num-white-checker r count))
+                          (dark-point r #f))
+                         (square spacing 'solid 'seagreen)
+                         (light-point r #f)
+                         (square spacing 'solid 'seagreen)
+                         (draw-top-row (+ 1 start-num) style rest))]    
+             [(cons 'EmptyPoint rest2)
+              (beside/align "top"
+                            (overlay/align "middle" "top"
+                          (if (symbol=? color 'Black)
+                              (num-black-checker r count)
+                              (num-white-checker r count))
+                          (dark-point r #f))
+                         (square spacing 'solid 'seagreen)
+                         (light-point r #f)
+                         (square spacing 'solid 'seagreen)
+                         (draw-top-row (+ 1 start-num) style rest2))]
+             [(cons (OccupiedPoint color2 count2) rest2)
+              (beside/align "top"
+                         (overlay/align "middle" "top"
+                          (if (symbol=? color 'Black)
+                              (num-black-checker r count)
+                              (num-white-checker r count))
+                          (dark-point r #f))
+                         (square spacing 'solid 'seagreen)
+                         (overlay/align "middle" "top"
+                          (if (symbol=? color2 'Black)
+                              (num-black-checker r count2)
+                              (num-white-checker r count2))
+                          (light-point r #f))
+                         (square spacing 'solid 'seagreen)
+                         (draw-top-row (+ 1 start-num) style rest2))])]
+          )])]))
+
+(: draw-bottom-row (Integer Style (Listof Point) -> Image))
+;; draws the bottom row of points
+;; inputs: similar to draw-top-row, start-num is initially set to 0
+;; and goes until draws bottom row
+;; style and list of points
+(define (draw-bottom-row start-num style points)
+  (cond
+    [(> start-num 2) empty-image]
+    [(< start-num 0) empty-image]
+    [else
+     (match style
+       [(Style r spacing black-checker white-checker
+               dark-point light-point bgc label black-die white-die)
+        (match points
+          ['() (beside/align "bottom"
+                             (light-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (dark-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (draw-bottom-row (+ 1 start-num) style points))]
+          [(cons 'EmptyPoint rest)
+           (match rest
+             ['() (beside/align "bottom"
+                             (light-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (dark-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (draw-bottom-row (+ 1 start-num) style rest))]
+             [(cons 'EmptyPoint rest2)
+              (beside/align "bottom"
+                         (light-point r #t)
+                         (square spacing 'solid 'seagreen)
+                         (dark-point r #t)
+                         (square spacing 'solid 'seagreen)
+                         (draw-bottom-row (+ 1 start-num) style rest2))]
+             [(cons (OccupiedPoint color2 count2) rest2)
+              (beside/align "bottom"
+                         (light-point r #t)
+                         (square spacing 'solid 'seagreen)
+                         (overlay/align "middle" "bottom"
+                         (if (symbol=? color2 'Black)
+                              (num-black-checker r count2)
+                              (num-white-checker r count2))
+                         (dark-point r #t))
+                         (square spacing 'solid 'seagreen)
+                         (draw-bottom-row (+ 1 start-num) style rest2))])]
+          [(cons (OccupiedPoint color count) rest)
+           (match rest
+             ['() (beside/align "bottom"
+                             (light-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (dark-point r #t)
+                             (square spacing 'solid 'seagreen)
+                             (draw-bottom-row (+ 1 start-num) style rest))]
+             [(cons 'EmptyPoint rest2)
+              (beside/align "bottom"
+                            (overlay/align "middle" "bottom"
+                          (if (symbol=? color 'Black)
+                              (num-black-checker r count)
+                              (num-white-checker r count))
+                          (light-point r #t))
+                         (square spacing 'solid 'seagreen)
+                         (dark-point r #t)
+                         (square spacing 'solid 'seagreen)
+                         (draw-bottom-row (+ 1 start-num) style rest2))]
+             [(cons (OccupiedPoint color2 count2) rest2)
+              (beside/align "bottom"
+                         (overlay/align "middle" "bottom"
+                          (if (symbol=? color 'Black)
+                              (num-black-checker r count)
+                              (num-white-checker r count))
+                          (light-point r #t))
+                         (square spacing 'solid 'seagreen)
+                         (overlay/align "middle" "bottom"
+                          (if (symbol=? color2 'Black)
+                              (num-black-checker r count2)
+                              (num-white-checker r count2))
+                          (dark-point r #t))
+                         (square spacing 'solid 'seagreen)
+                         (draw-bottom-row (+ 1 start-num) style rest2))])]
+          )])]))
+
+                                                            
+(: background (Integer Integer -> Image))
+;; draws background of board based on radius r and spacing s
+(define (background r s)
+   (rectangle (+ (* 30 r) (* 14 s))
+              (* 22 r)
+              'solid
+              'seagreen))
+  
+
+(: draw-black-bar (Integer Integer -> Image))
+;; draws the black-bar on the board
+;; inputs are radius (r) and spacing
+(define (draw-black-bar r spacing)
+   (rectangle (* 4 r) (* 11 r) 'solid 'goldenrod))
+
+(: draw-black-off (Board Integer Integer -> Image))
+;; draws the black-off on the board
+;; inputs are radius (r) and spacing
+(define (draw-black-off board r spacing)
+  (match board
+    [(Board _ _ _ black-off _)
+     (overlay
+      (overlay
+       (label (number->string black-off))
+       (black-checker r))
+       (rectangle (* 2 r) (* 11 r) 'solid 'goldenrod))]))
+
+(: draw-white-off (Board Integer Integer -> Image))
+;; draws the white-off on the board
+;; inputs are radius (r) and spacing
+(define (draw-white-off board r spacing)
+  (match board
+    [(Board _ _ _ _ white-off)
+     (overlay
+      (overlay
+       (label (number->string white-off))
+       (white-checker r))
+       (rectangle (* 2 r) (* 11 r) 'solid 'goldenrod))]))
+
+(: draw-white-bar (Integer Integer -> Image))
+;; draws the black-bar on the board
+;; inputs are radius (r) and spacing
+(define (draw-white-bar r spacing)
+   (rectangle (* 4 r) (* 11 r) 'solid 'goldenrod))
+
+(: black-checker (Integer -> Image))
+;; draws the black-checker
+;; inputs is the checker radius r
+;; outputs an image of that color's checker, sized accordingly
+(define (black-checker r)
+  (overlay
+   (circle r 'outline 'black)
+  (circle r 'solid 'brown)))
+
+(: white-checker (Integer -> Image))
+;; draws the white-checker
+;; inputs is the checker radius r
+;; outputs an image of that color's checker, sized accordingly
+(define (white-checker r)
+  (overlay
+   (circle r 'outline 'black)
+  (circle r 'solid 'white)))
+
+(: label (String -> Image))
+;; draws label on checker
+;; input is a string
+(define (label string)
+   (text string 12 'magenta))
+
+(: black-die : Integer Integer -> Image)
+;; draws the black-die
+;; inputs: checker radius r and number n
+;; Note: n goes from 1 to 6 to represent the dice number
+;; if n is any other number draws empty-image
+(: black-die : Integer Integer -> Image)
+(define (black-die r n)
+  (cond
+    [(= n 1)
+     (overlay
+      (circle (/ r 6) 'solid 'white)
+      (square r 'solid 'black))]
+    [(= n 2)
+     (overlay/align "left" "bottom"
+                    (circle (/ r 6) 'solid 'white)
+                    (overlay/align "right" "top"
+                                   (circle (/ r 6) 'solid 'white)
+                                   (square r 'solid 'black)))]
+    [(= n 3)
+     (overlay
+      (circle (/ r 6) 'solid 'white)
+      (black-die r 2))]
+    [(= n 4)
+     (overlay/align "left" "top"
+                    (circle (/ r 6) 'solid 'white)
+                    (overlay/align "right" "bottom"
+                                   (circle (/ r 6) 'solid 'white)
+                                   (black-die r 2)))]
+    [(= n 5)
+     (overlay
+      (circle (/ r 6) 'solid 'white)
+      (black-die r 4))]
+    [(= n 6)
+     (overlay/align "left" "middle"
+                    (circle (/ r 6) 'solid 'white)
+                    (overlay/align "right" "middle"
+                                   (circle (/ r 6) 'solid 'white)
+                                   (black-die r 4)))]
+    [else empty-image]))
+
+(: black-dice : Integer Integer -> Image)
+;; called on when click on dice to get new value
+;; in this case input n doesn't matter since use random runction
+(define (black-dice r n)
+  (black-die r (random 1 7)))
+
+(: white-die : Integer Integer -> Image)
+;; draws the white-die
+;; inputs: checker radius r and number n
+;; Note: n goes from 1 to 6 to represent the dice number
+(: white-die : Integer Integer -> Image)
+(define (white-die r n)
+  (cond
+    [(= n 1)
+     (overlay
+      (circle (/ r 6) 'solid 'black)
+      (square r 'solid 'white))]
+    [(= n 2)
+     (overlay/align "left" "bottom"
+                    (circle (/ r 6) 'solid 'black)
+                    (overlay/align "right" "top"
+                                   (circle (/ r 6) 'solid 'black)
+                                   (square r 'solid 'white)))]
+    [(= n 3)
+     (overlay
+      (circle (/ r 6) 'solid 'black)
+      (white-die r 2))]
+    [(= n 4)
+     (overlay/align "left" "top"
+                    (circle (/ r 6) 'solid 'black)
+                    (overlay/align "right" "bottom"
+                                   (circle (/ r 6) 'solid 'black)
+                                   (white-die r 2)))]
+    [(= n 5)
+     (overlay
+      (circle (/ r 6) 'solid 'black)
+      (white-die r 4))]
+    [(= n 6)
+     (overlay/align "left" "middle"
+                    (circle (/ r 6) 'solid 'black)
+                    (overlay/align "right" "middle"
+                                   (circle (/ r 6) 'solid 'black)
+                                   (white-die r 4)))]
+    [else empty-image]))
+
+(: white-dice : Integer Integer -> Image)
+;; called on when click on dice to get new value
+;; in this case input n doesn't matter since use random runction
+(define (white-dice r n)
+  (white-die r (random 1 7)))
+
+   
+(: num-white-checker (Integer Integer -> Image))
+;; based on count, draws number of white checker
+;; inputs: radius (r) and index/count (i)
+(define (num-white-checker r i)
+  (cond
+    [(= i 0) empty-image]
+    [(= i 1) (white-checker r)]
+    [(= i 2)
+     (above
+      (white-checker r)
+      (white-checker r))]
+    [(= i 3)
+     (above
+      (white-checker r)
+      (num-white-checker r 2))]
+    [(= i 4)
+     (above
+      (white-checker r)
+      (num-white-checker r 3))]
+    [(= i 5)
+     (above
+      (white-checker r)
+      (num-white-checker r 4))]
+    [(> i 5)
+     (above
+      (overlay
+       (label (number->string i))
+       (white-checker r))
+      (num-white-checker r 4))]
+    [else (error "negative input")]))
+
+(: num-black-checker (Integer Integer -> Image))
+;; based on count, draws number of black checker
+;; inputs: radius (r) and index/count (i)
+(define (num-black-checker r i)
+  (cond
+    [(= i 0) empty-image]
+    [(= i 1) (black-checker r)]
+    [(= i 2)
+     (above
+      (black-checker r)
+      (black-checker r))]
+    [(= i 3)
+     (above
+      (black-checker r)
+      (num-black-checker r 2))]
+    [(= i 4)
+     (above
+      (black-checker r)
+      (num-black-checker r 3))]
+    [(= i 5)
+     (above
+      (black-checker r)
+      (num-black-checker r 4))]
+    [(> i 5)
+     (above
+      (overlay
+       (label (number->string i))
+       (black-checker r))
+      (num-black-checker r 4))]
+    [else (error "negative input")]))
+
+
+(: take (All (a) Integer (Listof a) -> (Listof a)))
+;; take n items from the front of the list
+;; ex: (take 3 '(a b c d e f)) -> '(a b c)
+;; no error if too many items are requested
+;; function taken from class
+(define (take n points)
+  (cond
+    [(<= n 0) '()]
+    [(empty? points) '()]
+    [else (cons (first points)
+                (take (sub1 n) (rest points)))]))
+
+(check-expect (take 2 (list (OccupiedPoint 'Black 5)
+                            'EmptyPoint
+                            'EmptyPoint (OccupiedPoint 'Black 10)))
+              (list (OccupiedPoint 'Black 5) 'EmptyPoint))
+                    
+
+(: drop (All (a)Integer (Listof a) -> (Listof a)))
+;; drop n items from the front of the list
+;; ex : (drop 3 '(a b c d e f)) -> '(d e f)
+;; no error if too many items are requested
+(define (drop n points)
+  (cond
+    [(<= n 0) points]
+    [(empty? points) '()]
+    [else (drop (sub1 n) (rest points))]))
+
+(check-expect (drop 2 (list (OccupiedPoint 'Black 5)
+                            'EmptyPoint 'EmptyPoint
+                            (OccupiedPoint 'Black 10)))
+              (list 'EmptyPoint (OccupiedPoint 'Black 10)))
+
+
+(: chop (All (a) Integer (Listof a) -> (Listof (Listof a))))
+;; cut list into size-n sublists
+;; ex: (chop 2 '(a b c d e f)) -> '((a b) (c d) (e f))
+;; ex: (chop 4 '(a b c d e f)) -> '((a b c d) (e f))
+;; no error if the number of items is not multiple of n
+;; function taken from class
+(define (chop n points)
+  (cond
+    [(empty? points) '()]
+    [else (cons (take n points)
+                (chop n (drop n points)))]))
+
+(check-expect (chop 2 (list (OccupiedPoint 'Black 5)
+                            'EmptyPoint 'EmptyPoint
+                            (OccupiedPoint 'Black 10)))
+              (list (list (OccupiedPoint 'Black 5) 'EmptyPoint)
+              (list 'EmptyPoint (OccupiedPoint 'Black 10))))
+
+(: draw-left-board : Style Board -> Image)
+;; helper function: draws the left half of the board
+;; inputs: style and board
+(define (draw-left-board style board)
+  (match* (style board)
+    [((Style r spacing black-checker white-checker
+            dark-point light-point background label black-die white-die)
+      (Board points black-bar white-bar black-off white-off))     
+      (above
+        (draw-top-row 0 style (third (chop 6 points)))
+        (rectangle (+ (* 7 spacing) (* 12 r)) (* 2 r) 'solid 'seagreen)
+        (draw-bottom-row 0 style (reverse (second (chop 6 points)))))]))
+
+(: draw-right-board : Style Board -> Image)
+;; helper function: draws the right half of the board
+;; inputs: style and board
+(define (draw-right-board style board)
+  (match* (style board)
+    [((Style r spacing black-checker white-checker
+            dark-point light-point background label black-die white-die)
+      (Board points black-bar white-bar black-off white-off))     
+      (above
+        (draw-top-row 0 style (last (chop 6 points)))
+        (rectangle (+ (* 7 spacing) (* 12 r)) (* 2 r) 'solid 'seagreen)
+        (draw-bottom-row 0 style (reverse (first (chop 6 points)))))]))
+
+
+(: draw-board (Style Board -> Image))
+;; draws board
+;; inputs: style and board
+(define (draw-board style board)
+  (local
+    {(: draw-bgc : Style Board -> Image)
+     (define (draw-bgc style board)
+       (match style
+         [(Style r spacing black-checker white-checker
+                 dark-point light-point background label black-die white-die)
+          (overlay/align "right" "top"
+                         (draw-black-off board r spacing)
+                         (overlay/align "right" "bottom"
+                                        (draw-white-off board r spacing)                              
+                                        (background r spacing)))]))}            
+  (match* (style board)
+    [((Style r spacing black-checker white-checker
+            dark-point light-point background label black-die white-die)
+      (Board points black-bar white-bar black-off white-off))     
+     (overlay
+      (beside
+       (draw-left-board style board)
+       (above
+        (overlay
+         (label (number->string black-bar))
+         (draw-black-bar r spacing))
+        (overlay
+         (label (number->string white-bar))
+         (draw-white-bar r spacing)))
+       (draw-right-board style board))
+      (draw-bgc style board))])))
+
+
+(define test-style (Style 20 5 black-checker white-checker dark-point
+  light-point background label black-die white-die))
+
+(define test-style2 (Style 25 19 black-checker white-checker dark-point
+  light-point background label black-die white-die))
+(define test-style3 (Style 20 5 black-checker white-checker dark-point
+  light-point background label black-die white-die))
+
+(define start-board
+  (Board (append (list (OccupiedPoint 'Black 2))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 5)
+                       'EmptyPoint
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 2)))
+         0 0 0 0))
+
+(: click-where : Style Integer Integer -> ClickLoc)
+;; inputs: Style and x and y coords of mouse click
+;; ouput ClickLoc that describes where the user click
+(define (click-where style x y)
+  (match style
+    [(Style radius spacing black-checker white-checker
+             dark-point light-point background label black-die white-die)
+     (cond
+       [(and (<= (* 12 radius) y (* 22 radius))
+             (and (<= (+ (* 6 spacing) (* 16 radius)) x)
+                  (< x (- (+ (* 14 spacing) (* 30 radius))
+                          (+ (* 2 radius) (* 2 spacing))))))
+        (PointNum (- 6 (quotient (- x (+ (* 16 radius) (* 6 spacing)))
+                                 (+ (* 2 radius) spacing))))]
+       
+       [(and (<= (* 12 radius) y (* 22 radius))
+             (<= 0 x (+ (* 12 radius) (* 7 spacing))))
+        (PointNum (- 12 (quotient x (+ (* 2 radius) spacing))))]
+       
+       [(and (<= y (* 10 radius))
+             (<= x (+ (* 12 radius) (* 6 spacing))))
+        (PointNum (+ 13 (quotient x (+ (* 2 radius) spacing))))]
+       
+       [(and (<= y (* 10 radius))
+             (and (<= (+ (* 16 radius) (* 6 spacing)) x)
+                  (< x ( - (+ (* 14 spacing) (* 30 radius))
+                           (+ (* 2 radius) (* 2 spacing))))))
+        (PointNum (+ 19 (quotient (- x (+ (* 16 radius) (* 6 spacing)))
+                                  (+ (* 2 radius) spacing))))]
+       
+       [(and (<= y (* 22 radius))
+             (<= ( + (* 12 radius) (* 7 spacing)) x
+                 (- (+ (* 14 spacing) (* 30 radius))
+                    (+ (* 4 radius) (* 12 radius) (* 7 spacing)))))
+        'WhiteBar]
+       
+       [(and (<= y (* 22 radius))
+             (<= ( + (* 12 radius) (* 7 spacing) (* 2 radius)) x
+                 (- (+ (* 14 spacing) (* 30 radius))
+                    (+ (* 2 radius) (* 12 radius) (* 7 spacing)))))
+        'BlackBar]
+       
+       [(and (<= 0 y (* 11 radius))
+             (<= (+ (* 28 radius) (* 14 spacing)) x
+                 (+ (* 14 spacing) (* 30 radius))))
+        'BlackOff]
+       
+       [(and (<= (* 11 radius) y (* 22 radius))
+             (<= (+ (* 28 radius) (* 14 spacing)) x
+                 (+ (* 14 spacing) (* 30 radius))))
+        'WhiteOff]
+       
+       [(and (<= (* 10 radius) y (+ (* 10 radius) (* 2 radius)))
+             (<= (+ (* 3 spacing) (* 5 radius)) x
+                 (+ (* 3 spacing) (* 5 radius) (* 2 radius) (/ radius 2))))
+        'WhiteDice]
+       
+       [(and (<= (* 10 radius) y (+ (* 10 radius) (* 2 radius)))
+             (<= (+ (* 10 spacing) (* 21 radius)) x
+                 (+ (* 10 spacing) (* 21 radius) (* 2 radius) (/ radius 2))))
+        'BlackDice]      
+       [else 'Nowhere])]))
+
+(check-expect (click-where test-style 25 400) (PointNum 12))
+(check-expect (click-where test-style 390 400) (PointNum 6))
+(check-expect (click-where test-style 621 100) 'Nowhere)
+(check-expect (click-where test-style 360 100) (PointNum 19))
+(check-expect (click-where test-style 360 400) (PointNum 6))
+(check-expect (click-where test-style 90 100) (PointNum 15))
+(check-expect (click-where test-style 135 230) 'WhiteDice)
+
+
+(: BoardLoc=? : BoardLoc BoardLoc -> Boolean)
+;; function if BoardLocs are equal
+(define (BoardLoc=? loc1 loc2)
+  (match* (loc1 loc2)
+    [('BlackBar 'BlackBar) #t]
+    [('BlackBar 'WhiteBar) #f]
+    [('BlackBar 'BlackOff) #f]
+    [('BlackBar 'WhiteOff) #f]
+    [('BlackBar 'Nowhere) #f]
+    [('BlackBar (PointNum _)) #f]
+    [('WhiteBar 'BlackBar) #f]
+    [('WhiteBar 'WhiteBar) #t]
+    [('WhiteBar 'BlackOff) #f]
+    [('WhiteBar 'WhiteOff) #f]
+    [('WhiteBar 'Nowhere) #f]
+    [('WhiteBar (PointNum _)) #f]
+    [('BlackOff 'BlackBar) #f]
+    [('BlackOff 'WhiteBar) #f]
+    [('BlackOff 'BlackOff) #t]
+    [('BlackOff 'WhiteOff) #f]
+    [('BlackOff 'Nowhere) #f]
+    [('BlackOff (PointNum _)) #f]
+    [('WhiteOff 'BlackBar) #f]
+    [('WhiteOff 'WhiteBar) #f]
+    [('WhiteOff 'BlackOff) #f]
+    [('WhiteOff 'WhiteOff) #t]
+    [('WhiteOff 'Nowhere) #f]
+    [('WhiteOff (PointNum _)) #f]
+    [('Nowhere 'BlackBar) #f]
+    [('Nowhere 'WhiteBar) #f]
+    [('Nowhere 'BlackOff) #f]
+    [('Nowhere 'WhiteOff) #f]
+    [('Nowhere 'Nowhere) #t]
+    [('Nowhere (PointNum _)) #f]
+    [((PointNum n1) (PointNum n2))
+     (= n1 n2)]
+    [((PointNum _) 'BlackBar) #f]
+    [((PointNum _) 'WhiteBar) #f]
+    [((PointNum _) 'BlackOff) #f]
+    [((PointNum _) 'WhiteOff) #f]
+    [((PointNum _) 'Nowhere) #f]))
+(check-expect (BoardLoc=? (PointNum 1) (PointNum 1)) #t)
+    
+
+
+
+(: ClickLoc=? : ClickLoc ClickLoc -> Boolean)
+;; helper function: determines if 2 clicklocs are equal
+(define (ClickLoc=? click1 click2)
+  (match* (click1 click2)
+    [('BlackBar 'BlackBar) #t]
+    [('BlackBar 'WhiteBar) #f]
+    [('BlackBar 'BlackOff) #f]
+    [('BlackBar 'WhiteOff) #f]
+    [('BlackBar 'Nowhere) #f]
+    [('BlackBar (PointNum _)) #f]
+    [('BlackBar 'BlackDice) #f]
+    [('BlackBar 'WhiteDice) #f]
+    [('WhiteBar 'BlackBar) #f]
+    [('WhiteBar 'WhiteBar) #t]
+    [('WhiteBar 'BlackOff) #f]
+    [('WhiteBar 'WhiteOff) #f]
+    [('WhiteBar 'Nowhere) #f]
+    [('WhiteBar (PointNum _)) #f]
+     [('WhiteBar 'BlackDice) #f]
+    [('WhiteBar 'WhiteDice) #f]
+    [('BlackOff 'BlackBar) #f]
+    [('BlackOff 'WhiteBar) #f]
+    [('BlackOff 'BlackOff) #t]
+    [('BlackOff 'WhiteOff) #f]
+    [('BlackOff 'Nowhere) #f]
+    [('BlackOff (PointNum _)) #f]
+    [('BlackOff 'BlackDice) #f]
+    [('BlackOff 'WhiteDice) #f]
+    [('WhiteOff 'BlackBar) #f]
+    [('WhiteOff 'WhiteBar) #f]
+    [('WhiteOff 'BlackOff) #f]
+    [('WhiteOff 'WhiteOff) #t]
+    [('WhiteOff 'Nowhere) #f]
+    [('WhiteOff (PointNum _)) #f]
+    [('WhiteOff 'BlackDice) #f]
+    [('WhiteOff 'WhiteDice) #f]
+    [('Nowhere 'BlackBar) #f]
+    [('Nowhere 'WhiteBar) #f]
+    [('Nowhere 'BlackOff) #f]
+    [('Nowhere 'WhiteOff) #f]
+    [('Nowhere 'Nowhere) #t]
+    [('Nowhere (PointNum _)) #f]
+    [('Nowhere 'BlackDice) #f]
+    [('Nowhere 'WhiteDice) #f]
+    [((PointNum n1) (PointNum n2))
+     (= n1 n2)]
+    [((PointNum _) 'BlackBar) #f]
+    [((PointNum _) 'WhiteBar) #f]
+    [((PointNum _) 'BlackOff) #f]
+    [((PointNum _) 'WhiteOff) #f]
+    [((PointNum _) 'Nowhere) #f]
+    [((PointNum _) 'BlackDice) #f]
+    [((PointNum _) 'WhiteDice) #f]
+    [('BlackDice 'BlackBar) #f]
+    [('BlackDice 'WhiteBar) #f]
+    [('BlackDice 'BlackOff) #f]
+    [('BlackDice 'WhiteOff) #t]
+    [('BlackDice 'Nowhere) #f]
+    [('BlackDice (PointNum _)) #f]
+    [('BlackDice 'BlackDice) #t]
+    [('BlackDice 'WhiteDice) #f]
+    [('WhiteDice 'BlackBar) #f]
+    [('WhiteDice 'WhiteBar) #f]
+    [('WhiteDice 'BlackOff) #f]
+    [('WhiteDice 'WhiteOff) #t]
+    [('WhiteDice 'Nowhere) #f]
+    [('WhiteDice (PointNum _)) #f]
+    [('WhiteDice 'BlackDice) #f]
+    [('WhiteDice 'WhiteDice) #t]))
+(check-expect (ClickLoc=? (PointNum 1) (PointNum 1)) #t)
+
+
+(define start-points
+  (append (list (OccupiedPoint 'Black 2))
+          (make-list 4 'EmptyPoint)
+          (list (OccupiedPoint 'White 5)
+                'EmptyPoint
+                (OccupiedPoint 'White 3))
+          (make-list 3 'EmptyPoint)
+          (list (OccupiedPoint 'Black 5)
+                (OccupiedPoint 'White 5))
+          (make-list 3 'EmptyPoint)
+          (list (OccupiedPoint 'Black 3)
+                'EmptyPoint
+                (OccupiedPoint 'Black 5))
+          (make-list 4 'EmptyPoint)
+          (list (OccupiedPoint 'White 2))))
+        
+
+(: PointNum->Point : PointNum (Listof Point) -> Point)
+;; helper function: from pointnum tells which point it is
+(define (PointNum->Point num points)
+  (match num
+    [(PointNum n)
+     (list-ref points (sub1 n))]))
+(check-expect (PointNum->Point (PointNum 7) start-points) 'EmptyPoint)
+(check-expect (PointNum->Point (PointNum 6) start-points)
+              (OccupiedPoint 'White 5))
+(check-expect (PointNum->Point (PointNum 24) start-points)
+              (OccupiedPoint 'White 2))
+
+(: point=? : Point Point -> Boolean)
+;; see if 2 points are the same
+(define (point=? point1 point2)
+  (match* (point1 point2)
+    [('EmptyPoint 'EmptyPoint) #t]
+    [('EmptyPoint (OccupiedPoint _ _)) #f]
+    [((OccupiedPoint _ _) 'EmptyPoint) #f]
+    [((OccupiedPoint color1 count1) (OccupiedPoint color2 count2))
+     (and (symbol=? color1 color2) (= count1 count2))]))
+
+(check-expect (point=? 'EmptyPoint (OccupiedPoint 'Black 2)) #f)
+(check-expect (point=? 'EmptyPoint 'EmptyPoint) #t)
+(check-expect (point=? (OccupiedPoint 'Black 2) (OccupiedPoint 'Black 2)) #t)
+(check-expect (point=? (OccupiedPoint 'White 2) (OccupiedPoint 'Black 2)) #f)
+
+(: replace-at : All (A) Integer A (Listof A) -> (Listof A))
+;; replace the item at the given position
+;; position counting starts at 0
+;; ex: (replace-at 0 'Z '(a b c)) -> '(Z b c)
+;; ex: (replace-at 1 'Z '(a b c)) -> '(a Z c)
+(define (replace-at i x xs)
+  (cond
+    [(= i 0) (append
+              (list x)
+              (drop 1 xs))]
+    [(empty? xs) '()]
+    [else (append
+           (take i xs)
+           (list x)
+           (drop (add1 i) xs))]))
+
+(check-expect (replace-at 0 'Z '(a b c)) '(Z b c))
+(check-expect (replace-at 1 'Z '(a b c)) '(a Z c))
+
+
+(: sub-points : BoardLoc (Listof Point) -> (Listof Point))    
+;; helper function: changes the OccupiedPoint for apply-move
+;; called on when destination is blackbar, blackoff, whitebar etc.
+(define (sub-points destination points)
+  (match destination
+    [(PointNum n)
+     (if (point=? (PointNum->Point destination points) 'EmptyPoint)
+         points
+         (match (PointNum->Point destination points)
+           [(OccupiedPoint color count)
+            (if (> count 1)
+            (replace-at (sub1 n) (OccupiedPoint color (sub1 count)) points)
+            (replace-at (sub1 n) 'EmptyPoint points))]))]))        
+               
+(check-expect (sub-points (PointNum 3) start-points) start-points)
+(check-expect (sub-points (PointNum 24) start-points)
+              (append (list (OccupiedPoint 'Black 2))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 5)
+                       'EmptyPoint
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 1))))
+(check-expect (sub-points (PointNum 6) start-points)
+              (append (list (OccupiedPoint 'Black 2))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 4)
+                       'EmptyPoint
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 2))))
+
+
+                                       
+(: change-points :(Listof Point) BoardLoc BoardLoc -> (Listof Point))    
+;; helper function: changes the OccupiedPoint for apply-move
+;; inputs: the list of points, origin , and destination
+(define (change-points points origin destination)
+  (match* (origin destination)
+    [((PointNum n1) (PointNum n2))
+     (match* ((PointNum->Point origin points)
+              (PointNum->Point destination points))
+       [((OccupiedPoint color count) 'EmptyPoint)
+        (sub-points origin
+                    (replace-at (sub1 n2) (OccupiedPoint color 1) points))]
+       [((OccupiedPoint color count) (OccupiedPoint color2 count2))
+        (if (and (not (symbol=? color color2)) (> count2 1))
+            (error "illegal move")
+            (sub-points origin
+                        (replace-at (sub1 n2) (OccupiedPoint color
+                                                             (add1 count2))
+                                    points)))])]))
+    
+(check-expect (change-points start-points (PointNum 1) (PointNum 2))
+              (append (list (OccupiedPoint 'Black 1))
+              (list (OccupiedPoint 'Black 1))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'White 5)
+                       'EmptyPoint
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 2))))
+
+
+
+
+(define in-progress-board1
+  (Board (append (list (OccupiedPoint 'Black 2))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 4)
+                       (OccupiedPoint 'White 1)
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 2)))
+         0 0 0 0))
+
+(define in-progress-board2
+  (Board (append (list (OccupiedPoint 'Black 2))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 4)
+                       (OccupiedPoint 'White 1)
+                       (OccupiedPoint 'White 3))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 5)
+                       (OccupiedPoint 'White 5))
+                 (make-list 3 'EmptyPoint)
+                 (list (OccupiedPoint 'Black 3)
+                       'EmptyPoint
+                       (OccupiedPoint 'Black 5))
+                 (make-list 4 'EmptyPoint)
+                 (list (OccupiedPoint 'White 2)))
+         1 0 0 0))
+
+(: BoardLoc->PointNum : BoardLoc -> PointNum)
+;; converts BoardLoc to PointNum
+;; if not PointNum then raises error
+(define (BoardLoc->PointNum loc)
+  (match loc
+    [(PointNum n) (PointNum n)]
+    [(or 'BlackBar 'WhiteBar 'BlackOff 'WhiteOff) (error "error")]))
+
+
+(define-struct World
+  ([game : Game]
+   [style : Style]
+   [click1 : ClickLoc]
+   [click2 : BoardLoc]
+   [click3 : BoardLoc]
+   [whitedie1 : Integer]
+   [whitedie2 : Integer]
+   [blackdie1 : Integer]
+   [blackdie2 : Integer]
+   [highlight : Integer]
+   [history : (Listof Game)]
+   ))
+
+
+(: player? : Board BoardLoc -> Symbol)
+;; determines which player from BoardLoc
+(define (player? board boardloc)
+  (match board
+    [(Board points black-bar white-bar black-off white-off)
+     (match (PointNum->Point (BoardLoc->PointNum boardloc) points)
+       ['EmptyPoint 'None]
+       [(OccupiedPoint color count) color])]))
+(check-expect (player? start-board (PointNum 1)) 'Black)
+
+
+(: num-checkers : Board BoardLoc -> Integer)
+;; determines the count/ number of checkers from BoardLoc
+(define (num-checkers board boardloc)
+(match board
+    [(Board points black-bar white-bar black-off white-off)
+     (match (PointNum->Point (BoardLoc->PointNum boardloc) points)
+       ['EmptyPoint 0]
+       [(OccupiedPoint color count) count])]))
+(check-expect (num-checkers start-board (PointNum 1)) 2)
+
+(: ClickLoc->BoardLoc : ClickLoc -> BoardLoc)
+;; converts a ClickLoc to BoardLoc
+(define (ClickLoc->BoardLoc clickloc)
+  (match clickloc
+    ['BlackBar 'BlackBar]
+    ['WhiteBar 'WhiteBar]
+    ['BlackOff 'BlackOff]
+    ['WhiteOff 'WhiteOff]
+    ['Nowhere 'Nowhere]
+    [(PointNum n) (PointNum n)]))
+               
+                  
+(: highlight-point-x : Integer Integer Integer -> Integer)
+;; finds the x coordinate to highlight when clicked
+;; inputs: h (number of pointnum that is clicked), radius r, spacing
+(define (highlight-point-x h r spacing)
+  (cond
+    [(<= h 6) (+ (* (- 6 h)
+                    (+ (* 2 r) spacing))
+                 spacing (+ (* 17 r) (* 6 spacing)))]
+    [(or (= h 7) (= h 18)) (+ (* 11 r) (* 5 spacing))]
+    [(or (= h 8) (= h 17)) (+ (* 9 r) (* 4 spacing))]
+    [(or (= h 9) (= h 16)) (+ (* 7 r) (* 3 spacing))]
+    [(or (= h 10) (= h 15)) (+ (* 5 r) (* 2 spacing))]
+    [(or (= h 11) (= h 14)) (+ (* 3 r) spacing)]
+    [(or (= h 12) (= h 13)) r]
+    [(= h 19) (+ (* 17 r) (* 7 spacing))]
+    [(= h 20) (+ (* 19 r) (* 8 spacing))]
+    [(= h 21) (+ (* 21 r) (* 9 spacing))]
+    [(= h 22) (+ (* 23 r) (* 10 spacing))]
+    [(= h 23) (+ (* 25 r) (* 11 spacing))]
+    [(= h 24) (+ (* 27 r) (* 12 spacing))]
+    [else -1]))
+
+(: highlight-point-y : Integer Integer Integer -> Integer)
+;; finds the u coordinate to highlight when clicked
+;; inputs: h (number of pointnum that is clicked), radius r, spacing
+(define (highlight-point-y h r spacing)
+(cond
+  [(or (<= h 6) (<= 7 h 12))
+   (* 17 r)]
+  [(or (<= 19 h 24) (<= 13 h 18))
+   (* 5 r)]
+  [else -1]))
+
+        
+(: draw-game : World -> Image)
+;; draw function for the universe
+(define (draw-game world)
+  (match world
+    [(World game style click1 click2 click3 wd1 wd2 bd1 bd2 h history)
+     (match style
+       [(Style r spacing black-checker white-checker
+               dark-point light-point background label black-die white-die)
+        (match game
+          [(Game board player moves)
+          (match board
+            [(Board points black-bar white-bar black-off white-off)
+             (cond
+               [(= h 25)
+                (place-image (rectangle (* 2 r) (* 2 r) 'outline 'gold)
+                             (+ (* 15 r) (* 6 spacing) spacing)
+                             (* 11 r)
+                             (draw-world world))]
+               [(= h 26)
+                (place-image (rectangle (* 2 r) (* 2 r) 'outline 'gold)
+                             (+ (* 13 r) (* 6 spacing) spacing)
+                             (* 11 r)
+                             (draw-world world))]
+               [(= h -1) (draw-world world)]
+               [else (place-image (rectangle (* 2 r) (* 10 r) 'outline 'yellow)
+                                  (highlight-point-x h r spacing)
+                                  (highlight-point-y h r spacing)
+                                  (draw-world world))])])])])]))
+
+                                        
+(: draw-world : World -> Image)
+;; draw board with die on it
+(define (draw-world world)
+  (local
+    {(: draw-bgc : Style Board -> Image)
+     (define (draw-bgc style board)
+       (match style
+         [(Style r spacing black-checker white-checker
+                 dark-point light-point background label black-die white-die)
+          (overlay/align "right" "top"
+                         (draw-black-off board r spacing)
+                         (overlay/align "right" "bottom"
+                                        (draw-white-off board r spacing)                              
+                                        (background r spacing)))]))}
+  (local
+    {(: board-dice : World -> Image)
+     (define (board-dice world)
+       (match world
+         [(World (Game board turn moves) style
+                 click1 click2 click3 wd1 wd2 bd1 bd2 h history)                 
+          (match* (board style)
+            [((Board points black-bar white-bar black-off white-off)
+              (Style r spacing black-checker white-checker
+                    dark-point light-point background label black-die
+                    white-die))
+             (overlay
+              (beside
+               (overlay/align "middle" "middle"
+                              (beside
+                               (white-die r wd1)
+                               (square r 'solid 'seagreen)
+                               (white-die r wd2))
+                              (draw-left-board style board))
+               (overlay
+                (beside
+                 (overlay
+                  (label (number->string white-bar))
+                  (white-checker r))
+                 (overlay
+                  (label (number->string black-bar))
+                  (black-checker r)))
+               (above
+                 (draw-black-bar r spacing)
+                 (draw-white-bar r spacing)))
+               (overlay/align "middle" "middle"
+                              (beside
+                               (black-die r bd1)
+                               (square r 'solid 'seagreen)
+                               (black-die r bd2))
+                              (draw-right-board style board))
+              (above
+               (draw-black-off board r spacing)
+               (draw-white-off board r spacing)))
+              (background r spacing))])]))}
+    (match world
+      [(World (Game board turn moves) style click1 click2 click3
+              wd1 wd2 bd1 bd2 h history)
+       (match style
+         [(Style r spacing black-checker white-checker
+                 dark-point light-point background label black-die
+                 white-die)
+          (board-dice world)]
+            )]))))
+
+(: guarantee-byte (Integer -> Byte))
+(define (guarantee-byte n)
+  (if (byte? n) n (error "guarantee-byte: failure")))
+
+(: draw : World -> Image)
+;; if game over then display winner
+(define (draw world)
+  (match world
+    [(World game style click1 click2 click3 wd1 wd2 bd1 bd2 h history)
+     (match style
+       [(Style r _ _ _ _ _ _ _ _ _)
+        (if (game-over? game)
+            (overlay
+             (text (string-append "winner: " (symbol->string (winner game)))
+                   (guarantee-byte (* 2 r))
+                   'indigo)
+             (draw-game world))
+            (draw-game world))])]))
+
+
+
+;; ====== project3 
+
+(: distance : BoardLoc BoardLoc -> Integer)
+;; defined as the die roll needed to move
+;; Black player should be positie
+;; White player should be negative
+;; inputs: origin and destination
+(define (distance origin dest)
+  (match* (origin dest)
+    [('BlackBar 'WhiteBar) (error "illegal move")]
+    [('WhiteBar 'BlackBar) (error "illegal move")]
+    [('BlackOff 'WhiteOff) (error "illegal move")]
+    [('WhiteOff 'BlackOff) (error "illegal move")]
+    [((PointNum n1) (PointNum n2))
+     (cond
+       [(or (< n1 1) (< n2 1) (> n1 24) (> n2 24))
+         (error "invalid input")]
+       [(= n1 n2) (error "origin and dest can't be same")]
+       [else
+     (- n2 n1)])]
+    ;; from bar
+    [('BlackBar (PointNum n))
+     (if (and (<= n 6) (>= n 1))
+         n
+         (error "illegal move"))]
+    [('WhiteBar (PointNum n))
+     (if (and (<= n 24) (>= n 19))
+         (+ 1 (- 24 n))
+         (error "illegal move"))]
+    ;; bearing off
+    [((PointNum n) 'WhiteOff) n] ;; n should be from 1 to 6
+    [((PointNum n) 'BlackOff)  ;; n should be from 19-24
+     (+ 1 (- 24 n))]))
+     
+(check-expect (distance (PointNum 15) (PointNum 23)) 8)
+(check-expect (distance (PointNum 24) (PointNum 18)) -6)
+(check-expect (distance 'BlackBar (PointNum 1)) 1)
+(check-expect (distance 'WhiteBar (PointNum 23)) 2)
+(check-error (distance 'WhiteBar (PointNum 14)) "illegal move")
+(check-expect (distance (PointNum 20) 'BlackOff) 5)
+(check-expect (distance (PointNum 6) 'WhiteOff) 6)
+
+
+(: move=distance? : (Listof Integer) BoardLoc BoardLoc -> Boolean)
+;; helper function: sees if roll= attempt for apply-move
+;; inputs: game, origin, dest
+(define (move=distance? moves origin dest)
+  (match moves
+    ['() #f]
+    [(cons first rest)
+     (if (= first (abs (distance origin dest)))
+         #t
+         (move=distance? rest origin dest))]))
+(check-expect (move=distance? '(1 2) (PointNum 1) (PointNum 3)) #t)
+
+(define almost-win
+  (Board (append (list (OccupiedPoint 'White 1))
+                       (make-list 3 'EmptyPoint)
+                       (list (OccupiedPoint 'White 1)
+                       'EmptyPoint)
+                       (make-list 12 'EmptyPoint)
+                       (list 'EmptyPoint
+                             (OccupiedPoint 'Black 1)
+                             (OccupiedPoint 'Black 1)
+                             'EmptyPoint
+                             (OccupiedPoint 'Black 1)
+                             'EmptyPoint))
+         0 0 12 12))
+
+
+(: color? : Point -> Symbol)
+;; from list of points, determines the player that occupies that point
+(define (color? point)
+  (match point
+    ['EmptyPoint 'None]
+    [(OccupiedPoint color count) color]))
+(check-expect (color? (OccupiedPoint 'Black 2)) 'Black)
+
+
+(: bear-off? : Game -> Boolean)
+;; helper function: sees if allow player to bear-off
+;; inputs: game
+(define (bear-off? game)
+  (local
+    {(: counts : Game Integer -> Boolean)
+     (define (counts game n)
+       (match game
+         [(Game board player moves)
+          (match board
+            [(Board points black-bar white-bar _ _)
+             (match player
+               ['White ;; n from 7-24 (6-23 for list-ref)
+                (match points
+                  ['() (error "need points")]
+                  [(cons 'EmptyPoint rest)
+                   (if (and (>= n 6) (<= n 23))
+                       (if
+                        (and (not (symbol=? (color? (list-ref points n))
+                                            'White))
+                             (= white-bar 0))
+                        (counts game (add1 n))
+                        #f)
+                       #t)]
+                  [(cons (OccupiedPoint color count) rest)
+                   (if (and (>= n 6) (<= n 23))
+                       (if
+                        (and (not (symbol=? (color? (list-ref points n))
+                                            'White))
+                             (= white-bar 0))
+                        (counts game (add1 n))
+                        #f)
+                       #t)])]
+               ['Black ;; n from 0-17
+                (match points
+                  ['() (error "need points")]
+                  [(cons 'EmptyPoint rest)
+                   (if (and (>= n 0) (<= n 17))
+                       (if
+                        (and (not (symbol=? (color? (list-ref points n))
+                                            'Black))
+                             (= black-bar 0))
+                        (counts game (add1 n))
+                        #f)
+                       #t)]
+                  [(cons (OccupiedPoint color count) rest)
+                   (if (and (>= n 0) (<= n 17))
+                       (if
+                        (and (not (symbol=? (color? (list-ref points n))
+                                            'Black))
+                             (= black-bar 0))
+                        (counts game (add1 n))
+                        #f)
+                       #t)])])])]))}
+    (match game
+      [(Game board player moves)
+       (match player
+         ['White (counts game 6)]
+         ['Black (counts game 0)])])))
+
+                  
+(check-expect (bear-off? (Game almost-win 'White '(1 2))) #t)
+(check-expect (bear-off? (Game start-board 'White '(6 1))) #f)
+(check-expect (bear-off? (Game in-progress-board1 'Black '())) #f)
+              
+              
+(: legal-move? : Game BoardLoc BoardLoc -> Boolean)
+;; take in a current game situation and a proposed move
+;; evaluate it for legality
+;; inputs: game, origin, and dest
+(define (legal-move? game origin dest)
+  (match game
+    [(Game board player moves)
+     (match board
+       [(Board points black-bar white-bar _ _)
+        (match points
+          ['() #f]
+          [(cons 'EmptyPoint rest)
+           (match player
+             ['Black
+              (match* (origin dest)
+                [((PointNum n1) (PointNum n2))
+                   (and (< n1 n2)
+                        (not (point=? 'EmptyPoint
+                                      (PointNum->Point origin points)))
+                        (= black-bar 0)
+                        (move=distance? moves origin dest)
+                         (match (PointNum->Point dest points)
+                           ['EmptyPoint #t]
+                           [(OccupiedPoint color2 count2)
+                            (cond
+                              [(symbol=? 'Black color2) #t]
+                              [(= count2 1) #t]
+                              [else #f])]))]
+                [('WhiteBar _) #f]
+                [('WhiteOff _) #f]
+                [('BlackOff _) #f]
+                [('BlackBar (PointNum n))
+                 (match (PointNum->Point dest points)
+                   ['EmptyPoint
+                    (if (and (<= n 6) (>= n 1)
+                             (move=distance? moves origin dest))
+                        #t #f)]
+                   [(OccupiedPoint color3 count3)
+                    (if (and (<= n 6) (>= n 1)
+                             (move=distance? moves origin dest)
+                             (or (symbol=? color3 'Black) (= count3 1)))
+                        #t #f)])]
+                [((PointNum n) 'WhiteBar) #f]
+                [((PointNum n) 'WhiteOff) #f]
+                [((PointNum n) 'BlackBar) #f]
+                [((PointNum n) 'BlackOff)
+                 (if (and (<= n 24) (>= n 19)
+                          (not (point=? 'EmptyPoint
+                                        (PointNum->Point origin points)))
+                          (move=distance? moves origin dest)
+                          (= black-bar 0)
+                          (bear-off? game))
+                     
+                     #t #f)])]
+             ['White
+              (match* (origin dest)
+                [((PointNum n1) (PointNum n2))
+                 (and (> n1 n2)
+                      (not (point=? 'EmptyPoint
+                                    (PointNum->Point origin points)))
+                      (= white-bar 0)
+                      (move=distance? moves origin dest)
+                      (match (PointNum->Point dest points)
+                        ['EmptyPoint #t]
+                        [(OccupiedPoint color2 count2)
+                         (cond
+                           [(symbol=? 'White color2) #t]
+                           [(= count2 1) #t]
+                           [else #f])]))]
+                [('WhiteBar (PointNum n))
+                 (match (PointNum->Point dest points)
+                   ['EmptyPoint (if (and (<= n 24) (>= n 19)
+                          (move=distance? moves origin dest))
+                          #t #f)]
+                   [(OccupiedPoint color3 count3)
+                    (if (and (<= n 24) (>= n 19)
+                          (move=distance? moves origin dest)
+                          (or (symbol=? color3 'White) (= count3 1)))
+                          #t #f)])]
+                [('WhiteOff _) #f]
+                [('BlackBar _) #f]
+                [('BlackOff _) #f]
+                [((PointNum n) 'BlackBar) #f]
+                [((PointNum n) 'BlackOff) #f]
+                [((PointNum n) 'WhiteBar) #f]
+                [((PointNum n) 'WhiteOff)
+                 (if (and (>= n 1) (<= n 6)
+                          (not (point=? 'EmptyPoint
+                                        (PointNum->Point origin points)))
+                          (move=distance? moves origin dest)
+                          (= white-bar 0)
+                          (bear-off? game))
+                     #t #f)])])]
+             
+          [(cons (OccupiedPoint color count) rest)
+           (match player
+             ['Black
+              (match* (origin dest)
+                [((PointNum n1) (PointNum n2))
+                   (and (< n1 n2)
+                        (not (point=? 'EmptyPoint
+                                      (PointNum->Point origin points)))
+                        (= black-bar 0)
+                        (move=distance? moves origin dest)
+                         (match (PointNum->Point dest points)
+                           ['EmptyPoint #t]
+                           [(OccupiedPoint color2 count2)
+                            (cond
+                              [(symbol=? color color2) #t]
+                              [(= count2 1) #t]
+                              [else #f])]))]
+                [('WhiteBar _) #f]
+                [('WhiteOff _) #f]
+                [('BlackOff _) #f]
+                [('BlackBar (PointNum n))
+                 (match (PointNum->Point dest points)
+                   ['EmptyPoint
+                    (if (and (<= n 6) (>= n 1)
+                             (move=distance? moves origin dest))
+                        #t #f)]
+                   [(OccupiedPoint color3 count3)
+                    (if (and (<= n 6) (>= n 1)
+                             (move=distance? moves origin dest)
+                             (or (symbol=? color3 'Black) (= count3 1)))
+                        #t #f)])]
+                [((PointNum n) 'WhiteBar) #f]
+                [((PointNum n) 'WhiteOff) #f]
+                [((PointNum n) 'BlackBar) #f]
+                [((PointNum n) 'BlackOff)
+                 (if (and (<= n 24) (>= n 19)
+                          (not (point=? 'EmptyPoint
+                                        (PointNum->Point origin points)))
+                          (move=distance? moves origin dest)
+                          (= black-bar 0)
+                          (bear-off? game))
+                     #t #f)])]
+                
+             ['White
+              (match* (origin dest)
+                [((PointNum n1) (PointNum n2))
+                 (and (> n1 n2)
+                      (not (point=? 'EmptyPoint
+                                    (PointNum->Point origin points)))
+                      (= white-bar 0)
+                      (move=distance? moves origin dest)
+                      (match (PointNum->Point dest points)
+                        ['EmptyPoint #t]
+                        [(OccupiedPoint color2 count2)
+                         (cond
+                           [(symbol=? color color2) #t]
+                           [(= count2 1) #t]
+                           [else #f])]))]
+                [('WhiteBar (PointNum n))
+                 (match (PointNum->Point dest points)
+                   ['EmptyPoint (if (and (<= n 24) (>= n 19)
+                          (move=distance? moves origin dest))
+                          #t #f)]
+                   [(OccupiedPoint color3 count3)
+                    (if (and (<= n 24) (>= n 19)
+                          (move=distance? moves origin dest)
+                          (or (symbol=? color3 'White) (= count3 1)))
+                          #t #f)])]
+                [('WhiteOff _) #f]
+                [('BlackBar _) #f]
+                [('BlackOff _) #f]
+                [((PointNum n) 'BlackBar) #f]
+                [((PointNum n) 'BlackOff) #f]
+                [((PointNum n) 'WhiteBar) #f]
+                [((PointNum n) 'WhiteOff)
+                 (if (and (>= n 1) (<= n 6)
+                          (not (point=? 'EmptyPoint
+                                        (PointNum->Point origin points)))
+                          (move=distance? moves origin dest)
+                          (= white-bar 0)
+                          (bear-off? game))
+                     #t #f)])])
+           ])])]))
+
+(check-expect (legal-move? (Game start-board 'Black '(1 3))
+                           (PointNum 2) (PointNum 3)) #f)
+(check-expect (legal-move? (Game start-board 'Black '(6 3))
+                           (PointNum 1) (PointNum 7)) #t)
+(check-expect (legal-move? (Game start-board 'White '(2 3))
+                           (PointNum 1) (PointNum 6)) #f)
+(check-expect (legal-move? (Game start-board 'Black '(1 2))
+                           (PointNum 1) (PointNum 6)) #f)
+(check-expect (legal-move? (Game start-board 'Black '(1 2))
+                           (PointNum 12) (PointNum 11)) #f)
+(check-expect (legal-move? (Game in-progress-board2 'Black '(1 2))
+                           'BlackBar (PointNum 24)) #f)
+(check-expect (legal-move? (Game in-progress-board2 'Black '(1 2))
+                           'BlackBar (PointNum 1)) #t)
+(check-expect (legal-move? (Game start-board 'Black '(5 1))
+                           (PointNum 1) (PointNum 6)) #f)
+(check-expect (legal-move? (Game start-board 'Black '(5 2))
+                                 (PointNum 1) (PointNum 2)) #f)
+
+(check-expect (legal-move? (Game (Board (make-list 24 'EmptyPoint) 0 0 15 15)
+                                      'White '(5 3))
+                           (PointNum 1) (PointNum 4)) #f)
+(check-expect (legal-move? (Game (Board (append (make-list 20 'EmptyPoint)
+                                                (list (OccupiedPoint 'Black 1)
+                                                      (OccupiedPoint 'Black 1))
+                                                (make-list 2 'EmptyPoint))
+                                                 0 0 0 0)
+                                      'Black '(5 3))
+                           (PointNum 22) 'BlackOff) #t)
+
+
+(: add-points-update : Game BoardLoc BoardLoc -> Game)    
+;; helper function: changes the OccupiedPoint for apply-move
+;; called on when origin is blackbar, blackoff, whitebar etc.
+(define (add-points-update game origin destination)
+  (match game
+    [(Game board player moves)
+     (match board
+       [(Board points black-bar white-bar black-off white-off)
+        (match* (origin destination)
+          [('BlackBar (PointNum n))
+           (match (PointNum->Point destination points)
+             ['EmptyPoint
+              (Game (Board (replace-at (sub1 n)
+                                       (OccupiedPoint 'Black 1)
+                                       points)
+                           (sub1 black-bar) white-bar black-off white-off)
+                    player
+                    (delete (abs (distance origin destination)) moves))]
+             [(OccupiedPoint color count)
+              (cond
+                [(and (symbol=? color 'White) (> count 1))
+                 (error "can't move there")]
+                [(and (symbol=? color 'White) (= count 1))
+                 (Game (Board (replace-at (sub1 n)
+                                          (OccupiedPoint 'Black 1)
+                                          points)
+                              (sub1 black-bar) (add1 white-bar)
+                              black-off white-off)
+                       player
+                       (delete (abs (distance origin destination)) moves))]
+                [(symbol=? color 'Black)
+                 (Game (Board (replace-at (sub1 n)
+                                          (OccupiedPoint 'Black (add1 count))
+                                          points)
+                              (sub1 black-bar) white-bar black-off white-off)
+                       player
+                       (delete (abs (distance origin destination)) moves))]
+                [else (error "add-points error")])])]
+          [('WhiteBar (PointNum n))
+           (match (PointNum->Point destination points)
+             ['EmptyPoint
+              (Game (Board (replace-at (sub1 n) (OccupiedPoint 'White 1) points)
+                           black-bar (sub1 white-bar) black-off white-off)
+                    player
+                    (delete (abs (distance origin destination)) moves))]
+             [(OccupiedPoint color count)
+              (cond
+                [(and (symbol=? color 'Black) (> count 1))
+                 (error "can't move there")]
+                [(and (symbol=? color 'Black) (= count 1))
+                 (Game (Board (replace-at (sub1 n)
+                                          (OccupiedPoint 'White 1)
+                                          points)
+                              (add1 black-bar) (sub1 white-bar)
+                              black-off white-off)
+                       player
+                       (delete (abs (distance origin destination)) moves))]
+                [(symbol=? color 'White)
+                 (Game (Board (replace-at (sub1 n)
+                                          (OccupiedPoint 'White (add1 count))
+                                          points)
+                              black-bar (sub1 white-bar) black-off white-off)
+                       player
+                       (delete (abs (distance origin destination)) moves))]
+                [else (error "add-points error")])])])])]))
+(check-expect (add-points-update (Game
+                                  (Board
+                                   (make-list 24 'EmptyPoint)
+                                   1 0 0 0)
+                                  'Black
+                                  '(1 3)) 'BlackBar (PointNum 1))
+              (Game
+               (Board
+                (append
+                 (list (OccupiedPoint 'Black 1))
+                 (make-list 23 'EmptyPoint))
+                0 0 0 0)
+               'Black
+               '(3)))
+
+(: max-item : (Listof Integer) -> Integer)
+;; finds largest item in list
+(define (max-item xs)
+  (match xs
+    ['() (error "max-item need list")]
+    [(cons first '()) first]
+    [(cons first rest)
+     (local
+       {(define m (max-item rest))}
+       (if (> first m) first m))]))
+(check-expect (max-item '(1 2 3 4)) 4)
+
+(: sub-points-update : Game BoardLoc -> Game)    
+;; helper function: changes the OccupiedPoint for apply-move
+;; called on when destination is whiteoff, blackoff
+(define (sub-points-update game origin)
+  (match game
+    [(Game board player moves)
+     (match board
+       [(Board points black-bar white-bar black-off white-off)
+        (match origin
+          [(PointNum n)
+           (if (point=? (PointNum->Point origin points) 'EmptyPoint)
+               game
+               (match (PointNum->Point origin points)
+                 [(OccupiedPoint color count)
+                  (cond
+                    [(and (> count 1) (symbol=? color 'White))
+                     (Game (Board
+                             (replace-at (sub1 n)
+                                         (OccupiedPoint color (sub1 count))
+                                         points)
+                             black-bar white-bar black-off (add1 white-off))
+                            player
+                            (delete (abs (distance origin 'WhiteOff)) moves))] 
+                    [(and (> count 1) (symbol=? color 'Black))
+                     (Game (Board
+                             (replace-at (sub1 n)
+                                         (OccupiedPoint color (sub1 count))
+                                         points)
+                             black-bar white-bar (add1 black-off) white-off)
+                            player
+                            (delete (abs (distance origin 'BlackOff)) moves))]
+                    [(symbol=? color 'White)
+                     (Game (Board (replace-at (sub1 n) 'EmptyPoint points)
+                                  black-bar white-bar black-off
+                                  (add1 white-off))
+                           player
+                            (delete (abs (distance origin 'WhiteOff)) moves))]
+                     [else
+                     (Game (Board (replace-at (sub1 n) 'EmptyPoint points)
+                                  black-bar white-bar (add1 black-off)
+                                  white-off)
+                           player
+                            (delete (abs (distance origin 'BlackOff)) moves))
+                           ])]))])])]))
+(check-expect (sub-points-update (Game almost-win 'Black '(2 1)) (PointNum 23))
+              (Game (Board (append (list (OccupiedPoint 'White 1))
+                       (make-list 3 'EmptyPoint)
+                       (list (OccupiedPoint 'White 1)
+                       'EmptyPoint)
+                       (make-list 12 'EmptyPoint)
+                       (list 'EmptyPoint
+                             (OccupiedPoint 'Black 1)
+                             (OccupiedPoint 'Black 1)
+                             'EmptyPoint
+                             'EmptyPoint
+                             'EmptyPoint))
+         0 0 13 12) 'Black '(1)))
+
+ 
+(define-type (Option Integer)
+  (U 'None (Some Integer)))
+(define-struct (Some Integer)
+  ([value : Integer]))
+
+(: option->int ((Option Integer) -> Integer))
+;; helper function: used to convert option to integer
+(define (option->int option)
+  (match option
+    ['None 0]
+    [(Some n) n]))
+(check-expect (option->int (Some 5)) 5)
+
+(: index : Integer (Listof Integer) -> (Option Integer))
+;; helper function: returns the index
+;; where element occurs
+(define (index x list)
+  (local
+    {(: counts-up : (Listof Integer) Integer Integer -> (Option Integer))
+     (define (counts-up list x n)
+       (match list
+         ['() 'None]
+         [(cons first rest)
+          (if (= x first)
+              (Some n)
+              (counts-up rest x (add1 n)))]))}
+    (counts-up list x 1)))
+
+(check-expect (index 5 '(1 2 5)) (Some 3))
+
+(: delete : Integer (Listof Integer) -> (Listof Integer))
+;; helper function: removes an item from list
+(define (delete x list)
+  (cond
+    [(= 1 (option->int (index x list))) (drop 1 list)]
+    [else
+     (append
+      (take (sub1 (option->int (index x list))) list)
+      (drop (option->int (index x list)) list))]))
+
+(check-expect (delete 5 '(1 2 5)) '(1 2))
+(check-expect (delete 2 '(1 2 5)) '(1 5))
+(check-expect (delete 1 '(1 2 5)) '(2 5))
+
+
+
+(: apply-move-update : Game BoardLoc BoardLoc -> Game)
+;; inputs: game, origin loc, dest loc
+;; call on legal-move?
+;; update game to remove from list of dice rolls
+;; the value that was used to effect the move
+(define (apply-move-update game origin destination)
+  (local
+    {(: counts : Game BoardLoc BoardLoc Integer -> Game)
+     ;; n is each pointnum
+     (define (counts game origin destination n)
+       (cond
+         [(<= n 24)
+          (match game
+            [(Game board player moves)
+          (match board
+            [(Board points black-bar white-bar black-off white-off)              
+             (cond
+               [(or (BoardLoc=? origin 'Nowhere)
+                    (BoardLoc=? destination 'Nowhere))
+                game]
+               [(BoardLoc=? origin 'BlackBar)
+                (add-points-update game origin destination)]
+               [(BoardLoc=? origin 'WhiteBar)
+                (add-points-update game origin destination)]               
+               [(BoardLoc=? destination 'BlackOff)
+                (sub-points-update game origin)]
+               [(BoardLoc=? destination 'WhiteOff)
+                (sub-points-update game origin)]
+               [(BoardLoc=? destination (PointNum n))
+                (match (PointNum->Point (BoardLoc->PointNum origin) points)
+                  ['EmptyPoint game]
+                  [(OccupiedPoint color count) 
+                   (cond
+                     [(and (point=? (PointNum->Point (BoardLoc->PointNum
+                                                      destination)
+                                                     points)
+                                    (OccupiedPoint 'White 1))
+                           (symbol=? color 'White))
+                      (Game (Board (change-points points origin destination)
+                             black-bar white-bar black-off white-off)
+                            player
+                            (delete (abs (distance origin destination)) moves))]
+                     [(and (point=? (PointNum->Point
+                                     (BoardLoc->PointNum destination)
+                                     points)
+                                    (OccupiedPoint 'Black 1))
+                           (symbol=? color 'Black))
+                      (Game (Board (change-points points origin destination)
+                             black-bar white-bar black-off white-off)
+                            player
+                            (delete (abs (distance origin destination)) moves))]                
+                     [(point=? (PointNum->Point (BoardLoc->PointNum destination)
+                                                points)
+                               (OccupiedPoint 'White 1))
+                      (Game (Board (sub-points destination
+                                         (change-points points origin
+                                                        destination))
+                             black-bar (add1 white-bar) black-off white-off)
+                            player
+                            (delete (abs (distance origin destination)) moves))]
+                     [(point=? (PointNum->Point (BoardLoc->PointNum destination)
+                                                points)
+                               (OccupiedPoint 'Black 1))
+                      (Game (Board (sub-points destination
+                                         (change-points points origin
+                                                        destination))
+                             (add1 black-bar) white-bar black-off white-off)
+                            player
+                            (delete (abs (distance origin destination)) moves))]
+                     [else
+                      (Game (Board (change-points points origin destination)
+                             black-bar white-bar
+                             black-off white-off)
+                            player
+                            (delete (abs (distance origin destination))
+                                    moves))])])]
+                  [else (counts game origin destination (add1 n))])])])]
+         [else (error "counts: illegal move")]))}
+    (if (and (legal-move? game origin destination)
+             (not (game-over? game)))
+        (counts game origin destination 1)
+        game)))
+
+(check-expect (apply-move-update
+               (Game (Board (list (OccupiedPoint 'Black 2) 'EmptyPoint 
+'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 5) 'EmptyPoint 
+(OccupiedPoint 'White 3) 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 
+'Black 5) (OccupiedPoint 'White 5) 'EmptyPoint 'EmptyPoint 'EmptyPoint 
+(OccupiedPoint 'Black 3) 'EmptyPoint (OccupiedPoint 'Black 5) 'EmptyPoint 
+'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 2)) 0 0 0 0) 'Black
+                                                                       '(1 4))
+(PointNum 1) (PointNum 2))
+              (Game (Board (list (OccupiedPoint 'Black 1) (OccupiedPoint 
+'Black 1) 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 5) 
+'EmptyPoint (OccupiedPoint 'White 3) 'EmptyPoint 'EmptyPoint 'EmptyPoint 
+(OccupiedPoint 'Black 5) (OccupiedPoint 'White 5) 'EmptyPoint 'EmptyPoint 
+'EmptyPoint (OccupiedPoint 'Black 3) 'EmptyPoint (OccupiedPoint 'Black 5) 
+'EmptyPoint 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 2)) 0 0 0 
+0) 'Black '(4)))
+
+(check-expect (apply-move-update
+               (Game (Board (list (OccupiedPoint 'Black 1) (OccupiedPoint 
+'Black 1) 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 5) 
+'EmptyPoint (OccupiedPoint 'White 3) 'EmptyPoint 'EmptyPoint 'EmptyPoint 
+(OccupiedPoint 'Black 5) (OccupiedPoint 'White 5) 'EmptyPoint 'EmptyPoint 
+'EmptyPoint (OccupiedPoint 'Black 3) 'EmptyPoint (OccupiedPoint 'Black 5) 
+'EmptyPoint 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 2)) 0 0 0 
+0) 'Black '(6 2)) (PointNum 1) (PointNum 3))
+                          (Game (Board (list 'EmptyPoint
+                                             (OccupiedPoint 'Black 1) 
+(OccupiedPoint 'Black 1) 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 5) 
+'EmptyPoint (OccupiedPoint 'White 3) 'EmptyPoint 'EmptyPoint 'EmptyPoint 
+(OccupiedPoint 'Black 5) (OccupiedPoint 'White 5) 'EmptyPoint 'EmptyPoint 
+'EmptyPoint (OccupiedPoint 'Black 3) 'EmptyPoint (OccupiedPoint 'Black 5) 
+'EmptyPoint 'EmptyPoint 'EmptyPoint 'EmptyPoint (OccupiedPoint 'White 2)) 0 0 0 
+0) 'Black '(6)))
+(check-expect (apply-move-update (Game almost-win 'White '(5 2))
+                                 (PointNum 5) 'WhiteOff)
+              (Game (Board (append (list (OccupiedPoint 'White 1))
+                       (make-list 3 'EmptyPoint)
+                       (list 'EmptyPoint
+                       'EmptyPoint)
+                       (make-list 12 'EmptyPoint)
+                       (list 'EmptyPoint
+                             (OccupiedPoint 'Black 1)
+                             (OccupiedPoint 'Black 1)
+                             'EmptyPoint
+                             (OccupiedPoint 'Black 1)
+                             'EmptyPoint))
+         0 0 12 13) 'White '(2)))
+
+
+(: generate-moves : Game BoardLoc -> (Listof BoardLoc))
+;; generates list of moves from origin
+;; doesn't matter whether it's legal or not
+(define (generate-moves game origin)
+  (match game
+    [(Game board player moves)
+     (match player
+       ['Black
+        (match origin
+          ['WhiteOff '()]
+          ['BlackOff '()]
+          ['WhiteBar '()]
+          ['BlackBar
+          (build-list 6 (lambda ([x : Integer]) (PointNum (add1 x))))]
+          [(PointNum n)
+           (cond
+             [(and (<= n 24) (>= n 19))
+              (append (build-list (- 24 n)
+                                  (lambda ([x : Integer])
+                                    (PointNum (+ n (add1 x)))))
+                      (list 'BlackOff))]
+             [else
+             (build-list (- 24 n)
+                         (lambda ([x : Integer])
+                           (PointNum (+ n (add1 x)))))])])]
+       ['White
+        (match origin
+          ['WhiteOff '()]
+          ['BlackOff '()]
+          ['BlackBar '()]
+          ['WhiteBar
+           (list (PointNum 24) (PointNum 23) (PointNum 22) (PointNum 21)
+                 (PointNum 20) (PointNum 19))]
+          [(PointNum n)              
+           (cond
+             [(and (<= n 6) (>= n 1))
+              (append (reverse (build-list (sub1 n)
+                                           (lambda ([x : Integer])
+                                             (PointNum (add1 x))))) 
+                      (list 'WhiteOff))]
+             [else (reverse (build-list (sub1 n)
+                                        (lambda ([x : Integer])
+                                          (PointNum (add1 x)))))])])]
+                                                      )]))
+
+(check-expect (generate-moves (Game start-board 'Black '(3 2)) (PointNum 22))
+              (list (PointNum 23) (PointNum 24) 'BlackOff))
+(check-expect (generate-moves (Game start-board 'White '()) (PointNum 20))
+              (list (PointNum 19) (PointNum 18) (PointNum 17) (PointNum 16)
+                     (PointNum 15) (PointNum 14) (PointNum 13) (PointNum 12)
+                     (PointNum 11) (PointNum 10) (PointNum 9) (PointNum 8)
+                     (PointNum 7) (PointNum 6) (PointNum 5) (PointNum 4)
+                     (PointNum 3) (PointNum 2) (PointNum 1)))
+(check-expect (generate-moves (Game start-board 'White '()) (PointNum 1))
+              (list 'WhiteOff))
+              
+
+(: available-helper : Game BoardLoc (Listof BoardLoc) -> Boolean)
+;; helper function for available-moves
+;; tester to see if move is legal
+(define (available-helper game origin dests)
+  (match dests
+    ['() #f]
+    [(cons 'BlackOff rest)
+     (if (legal-move? game origin 'BlackOff) #t
+         (available-helper game origin rest))]
+    [(cons 'WhiteOff rest)
+     (if (legal-move? game origin 'WhiteOff) #t
+         (available-helper game origin rest))]
+    [(cons (PointNum n) rest)
+     (if (legal-move? game origin (PointNum n)) #t
+         (available-helper game origin rest))]
+    ))
+
+(check-expect (available-helper (Game (Board (make-list 24 'EmptyPoint) 0 0 15 15)
+                                      'White '(5 3))
+                                (PointNum 1) (generate-moves (Game
+                                                              (Board
+                                                               (make-list
+                                                                24 'EmptyPoint)
+                                                               0 0 15 15)
+                                      'White '(5 3)) (PointNum 1))) #f)
+
+(: available-moves? : Game -> Boolean)
+;; determine if player whose turn it is has any remaining moves they can make
+;; with available dice rolls
+;; input: game
+(define (available-moves? game)
+  (local
+    {(: counts-up : Game Integer -> Boolean)
+     (define (counts-up game n)
+       (if (<= n 24)
+       (if (available-helper game (PointNum n) (generate-moves game
+                                                               (PointNum n)))
+           #t
+           (counts-up game (add1 n)))
+       #f))}
+    (match game
+      [(Game _ _ moves)
+       (if (= (length moves) 0)
+           #f
+    (or (counts-up game 1)
+        (available-helper game 'BlackBar (generate-moves game 'BlackBar))
+        (available-helper game 'WhiteBar (generate-moves game 'WhiteBar))))])))
+
+
+(check-expect (available-moves? (Game start-board 'Black '(5 2))) #t)
+(check-expect (available-moves? (Game start-board 'Black '(1 3))) #t)
+
+(check-expect (available-moves? (Game start-board 'Black '())) #f)
+                                          
+
+(: game-over? : Game -> Boolean)
+;; determine if the game is over
+;; can be used in your board drawing and click-handling functions
+;; to display game status and block further gameplay
+(define (game-over? game)
+  (match game
+    [(Game board player moves)
+     (match board
+       [(Board points black-bar white-bar black-off white-off)
+        (or (and (= black-off 15) (= black-bar 0))
+            (and (= white-off 15) (= white-bar 0)))])]))
+
+(check-expect (game-over? (Game start-board 'White '())) #f)
+(check-expect (game-over? (Game (Board (append
+                                        (make-list 20 'EmptyPoint)
+                                        (list (OccupiedPoint 'White 15))
+                                        (make-list 3 'EmptyPoint))
+                                       0 0 15 0)
+                                       'White '())) #t)
+
+(: winner : Game -> Player)
+;; determiens winner of completed game
+(define (winner game)
+  (match game
+    [(Game board player moves)
+     (match board
+       [(Board points black-bar white-bar black-off white-off)
+        (cond
+          [(and (= black-off 15) (= black-bar 0)) 'Black]
+          [(and (= white-off 15) (= white-bar 0)) 'White]
+          [else (error "game not over")])])]))
+(check-expect (winner (Game (Board
+                             (append
+                              (make-list 23 'EmptyPoint)
+                              (list (OccupiedPoint 'Black 1)))
+                             0 0 14 15)
+                            'Black
+                            '(4 5)))
+              'White)
+
+(: click-handle : World Integer Integer Mouse-Event -> World)
+;; react-to-mouse function
+(define (click-handle w x y e)
+  (local
+    {(define bd-1 (random 1 7))}
+    (local
+      {(define bd-2 (random 1 7))}
+      (local
+        {(define wd-2 (random 1 7))}
+    (local
+      {(define wd-1 (random 1 7))}
+  (match e
+    ["button-down"
+     (match w
+       [(World game style click1 click2 click3 wd1 wd2 bd1 bd2 h history)
+        (match game
+          [(Game board turn moves)
+           (match (click-where style x y)
+             ;; can only click on dice when no avaialble moves
+             ['BlackDice
+              (if (available-moves? game)
+                  w
+                  (if (= bd-1 bd-2)
+                      (World (Game board 'Black (list bd-1 bd-1 bd-2 bd-2))
+                             style 'BlackDice 'Nowhere 'Nowhere
+                             wd1 wd2 bd-1 bd-2 -1
+                             (append
+                              (list (Game board 'Black
+                                          (list bd-1 bd-1 bd-2 bd-2)))
+                              history))
+                      (World (Game board 'Black (list bd-1 bd-2)) style
+                             'BlackDice 'Nowhere 'Nowhere
+                             wd1 wd2 bd-1 bd-2 -1
+                             (append
+                              (list (Game board 'Black
+                                          (list bd-1 bd-2)))
+                              history))))]
+             ['WhiteDice
+              (if (available-moves? game)
+                  w
+                  (if (= wd-1 wd-2)
+                      (World (Game board 'White (list wd-1 wd-1 wd-2 wd-2))
+                                style 'WhiteDice 'Nowhere 'Nowhere
+                                wd-1 wd-2 bd1 bd2 -1 (append
+                                       (list (Game board 'Black
+                                             (list wd-1 wd-1 wd-2 wd-2)))
+                                       history))
+                  (World (Game board 'White (list wd-1 wd-2)) style
+                                'WhiteDice 'Nowhere 'Nowhere
+                                wd-1 wd-2 bd1 bd2 -1
+                                (append
+                                 (list (Game board 'White (list wd-1 wd-2)))
+                                 history))))]
+             [_ (match click1
+                  ['BlackDice (match click2
+                                ['Nowhere
+                                 (match (click-where style x y)
+                                   ['WhiteOff w]
+                                   ['BlackOff w]
+                                   ['BlackBar ;;highlight blackbar
+                                    (World (Game board 'Black moves) style
+                                           'BlackDice 'BlackBar click3
+                                           wd1 wd2 bd1 bd2 25 history)]
+                                   [(PointNum n)
+                                    (cond
+                                      [(if (symbol=? (player? board
+                                                              (PointNum n))
+                                                     'White) 
+                                           w
+                                           (World (Game board 'Black moves) style
+                                                  'BlackDice (PointNum n)
+                                                  click3 wd1 wd2 bd1 bd2
+                                                  n history))]
+                                      [(= 0 (num-checkers board (PointNum n)))
+                                       w] 
+                                      [else w])]
+                                   [_ w])]
+                                [_ (match (click-where style x y)
+                                     [(PointNum n) (if
+                                                    (and
+                                                     (symbol=? turn 'Black)
+                                                     (or
+                                                      (symbol=?
+                                                       (player?
+                                                        board
+                                                        (ClickLoc->BoardLoc
+                                                         (click-where style x y)))
+                                                       'Black) 
+                                                      (< (num-checkers
+                                                          board
+                                                          (ClickLoc->BoardLoc
+                                                           (click-where style x y)))
+                                                         2))
+                                                     )
+                                                    (World (apply-move-update
+                                                            game
+                                                            click2
+                                                            (ClickLoc->BoardLoc
+                                                             (click-where
+                                                              style x y)))
+                                                           style
+                                                           'BlackDice
+                                                           'Nowhere
+                                                           'Nowhere
+                                                           wd1 wd2 bd1 bd2 n
+                                                           (append (list
+                                                                    (apply-move-update
+                                                                     game
+                                                                     click2
+                                                                     (ClickLoc->BoardLoc
+                                                                      (click-where
+                                                                       style x y))))
+                                                                   history))
+                                                  
+                                                    w)]
+                                     ['BlackOff (World (apply-move-update
+                                                        game
+                                                        click2
+                                                        'BlackOff)
+                                                       style
+                                                       'BlackDice
+                                                       'Nowhere
+                                                       'Nowhere
+                                                       wd1 wd2
+                                                       bd1 bd2 h
+                                                       (append (list (apply-move-update
+                                                                      game
+                                                                      click2
+                                                                      'BlackOff))
+                                                               history))]
+                                                                                                     
+                                     [_ w])])]
+                  ['WhiteDice (match click2
+                                ['Nowhere
+                                 (match (click-where style x y)
+                                   ['WhiteOff w]
+                                   ['BlackOff w]
+                                   ['WhiteBar ;; highlight whitebar
+                                    (World (Game board 'White moves)
+                                           style 'WhiteDice
+                                           'WhiteBar
+                                           click3
+                                           wd1 wd2 bd1 bd2 26 history)]
+                                   [(PointNum n)
+                                    (cond
+                                      [(if (symbol=?
+                                            (player? board (PointNum n))
+                                            'Black)
+                                           w
+                                           (World (Game board 'White moves)
+                                                  style 'WhiteDice
+                                                  (PointNum n)
+                                                  click3
+                                                  wd1 wd2 bd1 bd2 n history))]  
+                                      [(= 0 (num-checkers board (PointNum n)))
+                                       w]
+                                      [else w])]
+                                   [_ w])]
+                                [_ (match (click-where style x y)
+                                     [(PointNum n) (if
+                                                    (and (symbol=? turn 'White)
+                                                         (or
+                                                          (symbol=? (player?
+                                                                     board
+                                                                     (ClickLoc->BoardLoc
+                                                                      (click-where style x y)))
+                                                                    'White)
+                                                             (< (num-checkers
+                                                                 board
+                                                                 (ClickLoc->BoardLoc
+                                                                  (click-where style x y)))
+                                                                2))
+                                                         )
+                                                    (World (apply-move-update
+                                                            game
+                                                            click2
+                                                            (ClickLoc->BoardLoc
+                                                             (click-where style x y)))                                                                         
+                                                           style 'WhiteDice
+                                                           'Nowhere 'Nowhere
+                                                           wd1 wd2 bd1 bd2 n
+                                                           (append
+                                                            (list (apply-move-update
+                                                                   game
+                                                                   click2
+                                                                   (ClickLoc->BoardLoc
+                                                                    (click-where style x y))))
+                                                            history))
+                                                        
+                                                    w)]
+                                     ['WhiteOff (World (apply-move-update
+                                                        game
+                                                        click2
+                                                        'WhiteOff)
+                                                       style
+                                                       'WhiteDice 'Nowhere 'Nowhere
+                                                       wd1 wd2 bd1 bd2 h
+                                                       (append
+                                                        (list (apply-move-update
+                                                               game
+                                                               click2
+                                                               'WhiteOff))
+                                                        history))]
+                                     [_ w])])]
+                  [_ w])]
+             [_ w])])])]
+       [_ w]))))))   
+ 
+(: gen-init-world : Style -> World)
+;; makes initial world
+(define (gen-init-world style)
+  (local
+    {(define b1 (random 1 7))}
+    (local
+      {(define w1 (random 1 7))}
+      (cond
+        [(> b1 w1) (World (Game start-board 'Black (list w1 b1)) style
+         'BlackDice 'Nowhere 'Nowhere
+         w1 0 b1 0 -1 (list (Game start-board 'Black (list w1 b1))))]
+        [(< b1 w1) (World (Game start-board 'White (list w1 b1)) style
+         'WhiteDice 'Nowhere 'Nowhere
+         w1 0 b1 0 -1 (list (Game start-board 'White (list w1 b1))))]
+        [else
+          (gen-init-world style)]))))
+
+          
+(: react-to-key : World String -> World)
+;; when click "u" undos move
+;; when click "s" saves game
+;; when click "l" loads game
+;; inputs: World and the key
+(define (react-to-key w key)
+  (local
+    {(: get-moves : (Listof Game) -> (Listof Integer))
+     ;; get moves that have at least 2 numbers in it
+     (define (get-moves history)
+       (match history
+         ['() '()]
+         [(cons prev rest)
+          (match prev
+            [(Game board turn moves)
+             (if (>= (length moves) 2)
+                 moves
+                 (get-moves rest))])]))}
+  (match w
+    [(World game style click1 click2 click3 wd1 wd2 bd1 bd2 h history)
+     (match history
+       ['() w]
+       [(cons prev r)
+        (match prev
+          [(Game board turn moves)
+           (match game
+             [(Game _ player _)
+              (match player
+                ['White
+                 (match key
+                   ["u"
+                    (cond
+                      [(>= (length moves) 2)
+                       (if (= (length history) 1)
+                           (World (Game board turn (get-moves history))
+                                        style click1 click2 click3
+                                  (list-ref (get-moves history) 0) 0 bd1 bd2 h
+                                  (drop 1 history))
+                           (World prev style
+                                  click1 click2 click3
+                                  (list-ref (get-moves history) 0) ;; change dice value
+                                  (list-ref (get-moves history) 1)
+                                  bd1
+                                  bd2
+                                  h
+                                  (drop 1 history)))]
+                      [else
+                       (World prev style
+                              click1 click2 click3
+                              wd1 wd2 bd1 bd2 h
+                                (drop 1 history))])]                        
+                   ["s" (begin (save-game! w) w)]
+                   ["l" (load-game style)]
+                   [_ w])]
+                ['Black
+                 (match key
+                   ["u"
+                    (cond
+                      [(>= (length moves) 2)
+                       (if (= (length history) 1)
+                           (World (Game board turn (get-moves history))
+                                        style click1 click2 click3
+                                  wd1 wd2 (list-ref (get-moves history) 1) 0 h
+                                  (drop 1 history))
+                           (World prev
+                                  style
+                                  click1
+                                  click2
+                                  click3
+                                  wd1
+                                  wd2
+                                  (list-ref (get-moves history) 0)
+                                  (list-ref (get-moves history) 1)
+                                  h
+                                  (drop 1 history)))]
+                      [else                       
+                       (World prev style
+                              click1 click2 click3
+                              wd1 wd2 bd1 bd2 h
+                                (drop 1 history))])]
+                   ["s" (begin (save-game! w) w)]
+                   ["l" (load-game style)]
+                   [_ w])]
+                )])])])])))
+
+(draw (gen-init-world test-style))
+
+
+(: run : Style -> World)
+;; the argument to run is style
+(define (run style)
+  (big-bang (gen-init-world style) : World
+    [to-draw draw]
+    [on-mouse click-handle]
+    [on-key react-to-key]
+    ))
+
+
+;; ----- save/load
+
+(: Point->String : Point -> String)
+;; converts a point to a string
+(define (Point->String point)
+  (match point
+    ['EmptyPoint "_"]
+    [(OccupiedPoint color count)
+     (if (symbol=? color 'Black)
+         (string-append "B" (number->string count))
+         (string-append "W" (number->string count)))]))
+(check-expect (Point->String (OccupiedPoint 'Black 3)) "B3")
+(check-expect (Point->String 'EmptyPoint) "_")
+(check-expect (Point->String (OccupiedPoint 'White 2)) "W2")
+
+;; convert a text representation of an Integer to an Integer
+;; raise an error if the string is not a number
+;; return the integer part of the resulting number only
+;; (this is intended only to be used with integers)
+;; function given
+(: string->integer : String -> Integer)
+(define (string->integer s)
+  (local
+    {(define conv : (U Complex False) (string->number s))}
+    (if (complex? conv) (exact-round (real-part conv))
+      (error "string->integer: invalid integer"))))
+(check-expect (string->integer "3") 3)
+
+(: String->Point : String -> Point)
+;; converts string back into data type point
+(define (String->Point string)
+  (cond
+    [(string=? string "_") 'EmptyPoint]
+    [(string=? "B"
+               (list-ref (string-split string (substring string 1)) 0))
+     (OccupiedPoint 'Black (string->integer (substring string 1)))]
+    [else
+     (OccupiedPoint 'White (string->integer (substring string 1)))]))
+(check-expect (String->Point "B3") (OccupiedPoint 'Black 3))
+(check-expect (String->Point "_") 'EmptyPoint)
+(check-expect (String->Point "W2") (OccupiedPoint 'White 2))
+
+
+(: Points->String : (Listof Point) -> String)
+;; converts a list of points to a string
+(define (Points->String points)
+  (match points
+    ['() ""]
+    [(cons first '()) (Point->String first)]
+    [(cons first rest)
+     (string-append
+      (Point->String first)
+      " "
+      (Points->String rest))]))
+
+(check-expect (Points->String (list (OccupiedPoint 'Black 3)
+                                    (OccupiedPoint 'White 2)
+                                    'EmptyPoint))
+              "B3 W2 _")
+
+(: String->Points : String -> (Listof Point))
+;; converts string representation of points back into list of point
+(define (String->Points string)
+  (local
+    {(: string-list->points : (Listof String) -> (Listof Point))
+     (define (string-list->points strings)
+       (match strings
+         ['() '()]
+         [(cons first rest)
+          (cons (String->Point first) (string-list->points rest))]))}
+    (string-list->points (string-split string " "))))
+(check-expect (String->Points "B3 W2 _")
+              (list (OccupiedPoint 'Black 3)
+                                    (OccupiedPoint 'White 2)
+                                    'EmptyPoint))
+
+(: Board->String : Board -> String)
+;; converts board into string representation
+(define (Board->String board)
+  (match board
+    [(Board points black-bar white-bar black-off white-off)
+     (string-append (Points->String points)
+                    "|"
+                    (number->string black-bar)
+                    "|"
+                    (number->string white-bar)
+                    "|"
+                    (number->string black-off)
+                    "|"
+                    (number->string white-off))]))
+(check-expect (Board->String (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1))
+              "_ _|0|0|1|1")
+
+(: String->Board : String -> Board)
+;; converts string representation of board back into board
+(define (String->Board string)
+  (local
+    {(: get-points : (Listof String) -> (Listof Point))
+     (define (get-points strings)
+       (match strings
+         ['() '()]
+         [(cons first _)
+          (String->Points first)]))}
+    (Board (get-points (string-split string "|"))
+           (string->integer (list-ref (string-split string "|") 1))
+           (string->integer (list-ref (string-split string "|") 2))
+           (string->integer (list-ref (string-split string "|") 3))
+           (string->integer (list-ref (string-split string "|") 4)))))
+(check-expect (String->Board "_ _|0|0|1|1")
+              (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1))
+
+(: Player->String : Player -> String)
+;; converts player into string representation
+(define (Player->String player)
+  (match player
+    ['White "W"]
+    ['Black "B"]))
+(check-expect (Player->String 'Black) "B")
+(check-expect (Player->String 'White) "W")
+
+(: String->Player : String -> Player)
+;; converts string representation bac to player
+(define (String->Player string)
+  (match string
+    ["W" 'White]
+    ["B" 'Black]))
+(check-expect (String->Player "W") 'White)
+(check-expect (String->Player "B") 'Black)
+
+(: Moves->String : (Listof Integer) -> String)
+;; converts list of moves into string representation
+(define (Moves->String moves)
+  (match moves
+    ['() ""]
+    [(cons first '()) (number->string first)]
+    [(cons first rest)
+     (string-append
+      (number->string first)
+      " "
+      (Moves->String rest))]))
+(check-expect (Moves->String '(1 2 3 4)) "1 2 3 4")
+
+(: String->Moves : String -> (Listof Integer))
+;; converts string representaiton of moves back into its list
+(define (String->Moves string)
+  (local
+    {(: string-list->moves : (Listof String) -> (Listof Integer))
+     (define (string-list->moves strings)
+       (match strings
+         ['() '()]
+         [(cons first rest)
+          (cons (string->integer first)
+                (string-list->moves rest))]))}
+    (string-list->moves (string-split string " "))))
+(check-expect (String->Moves "1 2") '(1 2))
+
+(: Game->String : Game -> String)
+;; converts game into string representation
+(define (Game->String game)
+  (match game
+    [(Game board player moves)
+     (string-append
+      (Board->String board)
+      "@"
+      (Player->String player)
+      "@"
+      (Moves->String moves))]))
+(check-expect (Game->String (Game (Board
+                                   (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2)))
+              "_ _|0|0|1|1@B@1 2")
+
+(: String->Game : String -> Game)
+;; converts string representation of game back into game
+(define (String->Game string)
+  (local
+    {(: split : String -> (Listof String))
+     (define (split string)
+       (string-split string "@"))}
+    (Game (String->Board (list-ref (split string) 0))
+          (String->Player (list-ref (split string) 1))
+          (String->Moves (list-ref (split string) 2)))))
+(check-expect (String->Game "_ _|0|0|1|1@B@1 2")
+              (Game (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2)))
+(check-expect (String->Game "W2 _|0|0|1|0@W@3 1")
+              (Game (Board (list (OccupiedPoint 'White 2)
+                                 'EmptyPoint)
+                           0 0 1 0)
+                    'White
+                    '(3 1)))
+      
+      
+(: History->String : (Listof Game) -> String)
+;; converts history list into string representation
+(define (History->String games)
+  (match games
+    ['() ""]
+    [(cons first '()) (Game->String first)]
+    [(cons first rest)
+     (string-append
+      (Game->String first)
+      "!"
+      (History->String rest))]))
+(check-expect (History->String (list (Game (Board
+                                            (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2))
+                                     (Game (Board
+                                            (list (OccupiedPoint 'White 2)
+                                                  'EmptyPoint)
+                                                  0
+                                                  0
+                                                  1
+                                                  0)
+                                           'White '(3 1))))
+              "_ _|0|0|1|1@B@1 2!W2 _|0|0|1|0@W@3 1")
+
+(: String->History : String -> (Listof Game))
+;; converts string representaiton back into histoy list
+(define (String->History string)
+  (local
+    {(: split : (Listof String) -> (Listof Game))
+     (define (split list)
+       (match list
+         ['() '()]
+         [(cons first rest)
+          (cons (String->Game first) (split rest))]))}
+    (split (string-split string "!"))))
+(check-expect (String->History "_ _|0|0|1|1@B@1 2!W2 _|0|0|1|0@W@3 1")
+              (list (Game (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2))
+                                     (Game (Board
+                                            (list (OccupiedPoint 'White 2)
+                                                  'EmptyPoint)
+                                                  0
+                                                  0
+                                                  1
+                                                  0)
+                                           'White '(3 1))))
+
+;; ---working with files
+
+(: world->string : World -> String)
+;;  create a string of the history list of the current world
+;; with the current game state prepended
+(define (world->string world)
+  (match world
+    [(World game style click1 click2 click3 wd1 wd2 bd1 bd2 h history)
+     (string-append
+      (Game->String game)
+      "!"
+      (History->String history))]))
+(check-expect (world->string (World (Game (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2))
+                                    test-style
+                                    'Nowhere 'Nowhere 'Nowhere
+                                    1 2 3 4 -1
+                                    (list
+                                     (Game (Board
+                                            (list (OccupiedPoint 'White 2)
+                                                  'EmptyPoint)
+                                                  0
+                                                  0
+                                                  1
+                                                  0)
+                                           'White '(3 1))
+                                     (Game (Board
+                                            (list (OccupiedPoint 'Black 1)
+                                                  (OccupiedPoint 'White 2))
+                                                  0
+                                                  0
+                                                  0
+                                                  0)
+                                           'Black '(2 3)))))
+              "_ _|0|0|1|1@B@1 2!W2 _|0|0|1|0@W@3 1!B1 W2|0|0|0|0@B@2 3")
+     
+                     
+(: save-game! : World -> Void)
+;; prompt the user for an output file location
+;; then, save the game to that file
+;; do nothing if the user cancels
+(define (save-game! w)
+  (local
+    {(define path : (U Path False) (put-file))}
+    (if (path? path)
+      (local
+        {(: file : Output-Port)
+         (define file (open-output-file path))}
+           (begin
+             (write-string (world->string w) file)
+             (close-output-port file)))
+      (void))))
+
+(: game->moves : String -> String)
+;; helper function: from string of game, get the string for moves
+(define (game->moves string)
+  (local
+    {(: get-moves : (Listof String) -> String)
+     (define (get-moves list)
+       (list-ref list 2))}
+    (get-moves (string-split string "@"))))
+(check-expect (game->moves "_ _|0|0|1|1@B@1 2")
+              "1 2")
+
+(: index-string : String (Listof String) -> Integer)
+;; helper function: returns index where element occurs for string
+(define (index-string s strings)
+  (local
+    {(: counts-up : (Listof String) String Integer -> Integer)
+     (define (counts-up list s n)
+       (match list
+         ['() (error "input string list")]
+         [(cons first rest)
+          (if (string=? s first)
+              n
+              (counts-up rest s (add1 n)))]))}
+    (counts-up strings s 1)))
+(check-expect (index-string "a" '("a" "b")) 1)
+
+
+(: remove-string : String (Listof String) -> (Listof String))
+;; helper function: removes string from list
+(define (remove-string x xs)
+  (cond
+    [(= 1 (index-string x xs)) (drop 1 xs)]
+    [else
+     (append
+      (take (sub1 (index-string x xs)) xs)
+      (drop (index-string x xs) xs))]))
+(check-expect (remove-string "a" '("a" "b")) '("b"))
+  
+
+(: world->moves : String -> (Listof String))
+;; helper function: from list of history string get 
+;; moves that have length >= 3
+;; Note: if length of string is not >= 3 then find first 2 that are in history
+(define (world->moves string)
+  (local
+    {(: get-one-move : (Listof String) -> (Listof String))
+     (define (get-one-move strings)
+       (match strings
+         ['() '()]
+         [(cons first rest)
+          (if (>= (string-length (game->moves first)) 3)
+              (list (game->moves first))
+              (get-one-move rest))]))}
+    (local
+      {(: delete-move : (Listof String) -> (Listof String))
+       (define (delete-move strings)
+         (match strings
+           ['() '()]
+           [(cons first rest)
+              (remove-string first strings)]))}              
+      (append
+       (get-one-move (string-split string "!"))
+       (get-one-move (delete-move (string-split string "!")))))))
+(check-expect (world->moves
+               "_ _|0|0|1|1@B@1 2!W2 _|0|0|1|0@W@3 1")
+              '("1 2" "3 1"))
+      
+
+(: string->world : Style String -> World)
+;; read a history list from the string, use the first game state in the
+;; history list as the current game state and place the rest of the
+;; history list as undo points in the World
+(define (string->world style string)
+  (local
+    {(: history : (Listof String) -> (Listof Game))
+     (define (history list)
+       (match list
+         ['() '()]
+         [(cons first rest)
+          (cons (String->Game first) (history rest))]))}
+    (local
+      {(: get-player : String -> String)
+       (define (get-player string)
+         (list-ref (string-split string "@") 1))}
+      (if (string=? "W" (get-player (list-ref (string-split string "!") 0)))          
+          (World (String->Game (list-ref (string-split string "!") 0))
+                 style
+                 'Nowhere 'Nowhere 'Nowhere
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 0) " ") 0))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 0) " ") 1))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 1) " ") 0))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 1) " ") 1))
+                 -1
+                 (history (drop 1 (string-split string "!"))))
+          (World (String->Game (list-ref (string-split string "!") 0))
+                 style
+                 'Nowhere 'Nowhere 'Nowhere
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 1) " ") 0))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 1) " ") 1))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 0) " ") 0))
+                 (string->integer (list-ref
+                                   (string-split
+                                    (list-ref (world->moves string) 0) " ") 1))
+                 -1
+                 (history (drop 1 (string-split string "!"))))
+          ))))
+(check-expect (string->world test-style
+                "_ _|0|0|1|1@B@1 2!W2 _|0|0|1|0@W@3 1!B1 W2|0|0|0|0@B@2 3" )
+              (World (Game (Board (list 'EmptyPoint 'EmptyPoint)
+                                    0
+                                    0
+                                    1
+                                    1) 'Black '(1 2))
+                                    test-style
+                                    'Nowhere 'Nowhere 'Nowhere
+                                    3 1 1 2 -1
+                                    (list
+                                     (Game (Board (list (OccupiedPoint 'White 2)
+                                                        'EmptyPoint)
+                                                  0
+                                                  0
+                                                  1
+                                                  0)
+                                           'White '(3 1))
+                                     (Game (Board
+                                            (list (OccupiedPoint 'Black 1)
+                                                  (OccupiedPoint 'White 2))
+                                                  0
+                                                  0
+                                                  0
+                                                  0)
+                                           'Black '(2 3)))))
+             
+
+(: load-game : Style -> World)
+;; ask the user to choose a file
+;; then load an in-progress game from that file
+;; use the provided Style to make a new World
+;; raise an error if the user cancels or if something goes wrong
+(define (load-game s)
+  (local
+    {(define path : (U Path False) (get-file))}
+    (if (path? path)
+      (string->world s (port->string (open-input-file path)))
+      (error "load-game: user cancelled"))))
+
+(test)
